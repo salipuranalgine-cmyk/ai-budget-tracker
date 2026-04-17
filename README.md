@@ -57,7 +57,10 @@ python main.py
 
 📸 Screenshots
 
-> *(Check the `Guide/` folder for usage screenshots and walkthrough)*
+<img width="826" height="953" alt="AI Smart Saver - Budget Guardian 4_13_2026 10_06_43 PM" src="https://github.com/user-attachments/assets/e5782091-a467-4a46-8e02-fcf88056a5d3" />
+<img width="826" height="953" alt="AI Smart Saver - Budget Guardian 4_13_2026 10_06_39 PM" src="https://github.com/user-attachments/assets/8686fe22-8798-4142-af39-46fa60ab64e0" />
+<img width="826" height="953" alt="AI Smart Saver - Budget Guardian 4_13_2026 10_05_40 PM" src="https://github.com/user-attachments/assets/963532c2-2427-47e4-9175-24c434a22f93" />
+<img width="1015" height="681" alt="AI Smart Saver - Budget Guardian 4_13_2026 10_02_09 PM" src="https://github.com/user-attachments/assets/d07bc519-6c93-4895-8279-61af18584f02" />
 
 ---
 
