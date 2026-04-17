@@ -7,20 +7,20 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 ✨ Features
 
 - **Multi-user profiles** — Create multiple profiles with custom emoji avatars; switch anytime
-- **Dashboard** — At-a-glance overview of income, expenses, and remaining budget
-- **Transactions** — Log income and expenses with category tagging
-- **Recurring transactions** — Auto-applied on launch (salary, bills, subscriptions)
-- **Budget limits** — Set per-category spending limits and track progress
-- **AI Insights** — AI-generated analysis of your spending patterns and saving tips
-- **CSV Export** — Export your transaction history for external use
-- **Dark / Light theme toggle** — Comfortable viewing any time of day
-- **Fully offline** — All data stored locally via SQLite; nothing leaves your device
+- **Dashboard** - At-a-glance overview of income, expenses, and remaining budget
+- **Transactions** - Log income and expenses with category tagging
+- **Recurring transactions** - Auto-applied on launch (salary, bills, subscriptions)
+- **Budget limits** - Set per-category spending limits and track progress
+- **AI Insights** - AI-generated analysis of your spending patterns and saving tips
+- **CSV Export** - Export your transaction history for external use
+- **Dark / Light theme toggle** - Comfortable viewing any time of day
+- **Fully offline** - All data stored locally via SQLite; nothing leaves your device
 
 ---
 
 🛠️ Tech Stack
 
-|        Layer | Technology |
+|        Layer | Technology                                          |
 |--------------|-----------------------------------------------------|
 | UI Framework | [Flet](https://flet.dev/) (Flutter-based Python UI) |
 |   Language   |Python 3.10+                                         |
