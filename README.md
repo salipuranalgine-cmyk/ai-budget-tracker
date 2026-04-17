@@ -1,4 +1,4 @@
-💰 AI Smart Saver — Budget Guardian
+💰 AI Smart Saver - Budget Guardian
 
 A personal budget tracking desktop app built with **Python + Flet**, featuring AI-powered spending insights, multi-user profiles, recurring transaction automation, and a clean dark/light UI.
 
@@ -6,7 +6,7 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 
 ✨ Features
 
-- **Multi-user profiles** — Create multiple profiles with custom emoji avatars; switch anytime
+- **Multi-user profiles** - Create multiple profiles with custom emoji avatars; switch anytime
 - **Dashboard** - At-a-glance overview of income, expenses, and remaining budget
 - **Transactions** - Log income and expenses with category tagging
 - **Recurring transactions** - Auto-applied on launch (salary, bills, subscriptions)
