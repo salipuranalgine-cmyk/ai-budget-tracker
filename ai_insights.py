@@ -2,12 +2,18 @@
 ai_insights.py
 AI budget analysis — tries Ollama (offline) first, falls back to
 Anthropic claude-haiku (online) if an API key is stored.
+
+Supports both one-shot insight and multi-turn chat.
 """
 from __future__ import annotations
 
 import json
 import urllib.request
 import urllib.error
+
+# A message dict used for conversation history
+# {"role": "user" | "assistant", "content": str}
+Message = dict[str, str]
 
 
 # ---------------------------------------------------------------------------
@@ -32,14 +38,14 @@ def _pick_ollama_model() -> str:
         return "llama3.2"
 
 
-def _ask_ollama(prompt: str) -> str | None:
-    """Returns response text, or None if Ollama is unavailable."""
+def _ask_ollama_chat(messages: list[Message]) -> str | None:
+    """Send a full conversation history to Ollama. Returns reply or None."""
     try:
         import ollama
         model = _pick_ollama_model()
         response = ollama.chat(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             options={"temperature": 0.5},
         )
         if hasattr(response, "message"):
@@ -57,15 +63,23 @@ ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"
 
 
-def _ask_anthropic(prompt: str, api_key: str) -> str | None:
-    """Returns response text, or None if the call fails."""
+def _ask_anthropic_chat(
+    messages: list[Message],
+    api_key: str,
+    system_prompt: str = "",
+) -> str | None:
+    """Send full conversation history to Anthropic. Returns reply or None."""
     if not api_key:
         return None
-    payload = json.dumps({
+    payload_dict: dict = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 600,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+        "max_tokens": 800,
+        "messages": messages,
+    }
+    if system_prompt:
+        payload_dict["system"] = system_prompt
+
+    payload = json.dumps(payload_dict).encode("utf-8")
     req = urllib.request.Request(
         ANTHROPIC_API_URL,
         data=payload,
@@ -85,46 +99,55 @@ def _ask_anthropic(prompt: str, api_key: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Prompt builder — universal, language-adaptive
+# System / context prompt builder
 # ---------------------------------------------------------------------------
 
-def _build_prompt(expenses_summary: str) -> str:
+def _build_system_prompt(financial_context: str) -> str:
     return f"""You are a smart, friendly personal finance advisor built into a budget tracking app.
-Your user can be from any country — adapt your tone and language accordingly based on their currency and spending context.
+Your user can be from any country — adapt your language based on their currency and spending context.
 
-Your job: analyze the user's spending data and give clear, practical, and encouraging financial advice.
+You have access to the user's current financial data below. Use it to give accurate, personalized advice.
+When the user asks questions, answer based on this data. Be conversational, concise, and encouraging.
 
 Guidelines:
-- Write in plain, friendly English that anyone can understand
-- Keep it concise: 4–5 bullet points, each 1–2 sentences max
-- Use the currency symbol shown in the data (do not assume it's always peso)
-- If balance is low or a category is over budget, flag it clearly but kindly
-- Give at least one specific, actionable tip the user can act on right now
-- If spending looks healthy, say so and encourage keeping it up
-- End with one short motivational sentence
-- Do NOT use slang, regional expressions, or assume the user's nationality
-- Do NOT use markdown headers or bold — plain bullet points only
+- Write in plain, friendly language anyone can understand
+- Keep replies concise — 2 to 4 short paragraphs or bullet points max
+- Use the currency symbol from the data (do not assume it's always peso)
+- Flag budget issues clearly but kindly
+- Give actionable tips the user can act on right now
+- Do NOT use markdown headers or bold formatting — plain text or bullet points only
 
-User's financial data:
-{expenses_summary}
+Current financial data:
+{financial_context}
 """
 
 
+def _build_initial_prompt() -> str:
+    """The opening message the AI sends when the chat is first opened."""
+    return (
+        "Please greet the user warmly and give a concise analysis of their current "
+        "financial data in 3 to 4 bullet points. Flag any concerns, highlight anything "
+        "positive, and invite them to ask follow-up questions."
+    )
+
+
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry points
 # ---------------------------------------------------------------------------
 
 def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
-    prompt = _build_prompt(expenses_summary)
+    """Legacy one-shot insight (still used if needed)."""
+    system = _build_system_prompt(expenses_summary)
+    messages: list[Message] = [{"role": "user", "content": _build_initial_prompt()}]
 
-    # 1 — Try offline Ollama first
-    result = _ask_ollama(prompt)
+    # Ollama: pass system as first user message since it doesn't have a system param
+    ollama_messages = [{"role": "user", "content": system + "\n\n" + _build_initial_prompt()}]
+    result = _ask_ollama_chat(ollama_messages)
     if result:
         return result.strip()
 
-    # 2 — Fall back to Anthropic API (online)
     if api_key:
-        result = _ask_anthropic(prompt, api_key)
+        result = _ask_anthropic_chat(messages, api_key, system_prompt=system)
         if result:
             return result.strip()
         return (
@@ -132,7 +155,6 @@ def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
             "Please check your internet connection and try again."
         )
 
-    # 3 — Both unavailable — clear instructions
     return (
         "🤖 AI is not available right now.\n\n"
         "You have two options to enable it:\n"
@@ -141,4 +163,40 @@ def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
         "• Online: Add your Anthropic API key in Settings → AI Setup — "
         "works on any device with an internet connection.\n\n"
         "Tap Ask AI again once either option is ready."
+    )
+
+
+def chat_with_ai(
+    history: list[Message],
+    financial_context: str,
+    api_key: str = "",
+) -> str:
+    """
+    Multi-turn chat. `history` is the full conversation so far
+    (list of {"role": "user"/"assistant", "content": str}).
+    Returns the AI's next reply as a string.
+    """
+    system = _build_system_prompt(financial_context)
+
+    # --- Ollama: inject system as a leading user message ---
+    ollama_messages: list[Message] = [
+        {"role": "user", "content": system}
+    ] + history
+    result = _ask_ollama_chat(ollama_messages)
+    if result:
+        return result.strip()
+
+    # --- Anthropic: use proper system param ---
+    if api_key:
+        result = _ask_anthropic_chat(history, api_key, system_prompt=system)
+        if result:
+            return result.strip()
+        return (
+            "⚠️ Could not reach Anthropic. "
+            "Please check your internet connection and try again."
+        )
+
+    return (
+        "🤖 AI is not available. Enable Ollama (offline) or add your "
+        "Anthropic API key in Settings → AI Setup."
     )
