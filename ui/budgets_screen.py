@@ -270,7 +270,7 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
     # ---- Duration chip (auto-computed) ----
     duration_chip = ft.Text("", size=12, color=ft.Colors.CYAN_300, italic=True)
 
-    budget_list = ft.Column(spacing=10)
+    budget_list = ft.Column(spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
     def toast(msg: str):
         page.snack_bar = ft.SnackBar(ft.Text(msg))
@@ -523,6 +523,7 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
         expand=True,
         scroll=ft.ScrollMode.AUTO,
         spacing=10,
+        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=[
             ft.Card(
                 content=ft.Container(
@@ -537,7 +538,12 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
                             ),
 
                             # ── Row 1: category + amount ──────────────────────
-                            ft.Row(wrap=True, spacing=8, controls=[category, limit_input]),
+                            ft.ResponsiveRow(
+                                controls=[
+                                    ft.Container(col={"xs": 12, "md": 7}, content=category),
+                                    ft.Container(col={"xs": 12, "md": 5}, content=limit_input),
+                                ],
+                            ),
 
                             ft.Divider(height=1, color=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)),
 

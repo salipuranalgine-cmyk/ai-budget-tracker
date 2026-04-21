@@ -1226,9 +1226,9 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     )
 
-    one_time_list = ft.Column(spacing=8)
+    one_time_list = ft.Column(spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
     show_recurring_state = [False]
-    rec_container = ft.Column(visible=False, spacing=8)
+    rec_container = ft.Column(visible=False, spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
     def refresh_recurring():
         rec_container.controls.clear()
@@ -1482,12 +1482,15 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ],
     )
 
-    filter_row = ft.Row(
-        spacing=8,
+    filter_row = ft.ResponsiveRow(
         controls=[
-            search_field,
-            category_filter,
-            ft.IconButton(ft.Icons.SEARCH, tooltip="Search", on_click=refresh_list),
+            ft.Container(col={"xs": 12, "md": 7}, content=search_field),
+            ft.Container(col={"xs": 12, "md": 4}, content=category_filter),
+            ft.Container(
+                col={"xs": 12, "md": 1},
+                alignment=ft.Alignment(1, 0),
+                content=ft.IconButton(ft.Icons.SEARCH, tooltip="Search", on_click=refresh_list),
+            ),
         ],
     )
 
@@ -1497,6 +1500,7 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         expand=True,
         scroll=ft.ScrollMode.AUTO,
         spacing=10,
+        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=[
             toolbar,
             ft.Card(
