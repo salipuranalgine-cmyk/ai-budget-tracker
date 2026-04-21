@@ -874,3 +874,28 @@ def delete_all_chat_sessions() -> None:
     conn.execute("DELETE FROM chat_sessions")
     conn.commit()
     conn.close()
+
+
+def truncate_chat_messages_after_index(session_id: int, keep_count: int) -> None:
+    """Keep only the first keep_count messages for a session; delete the rest.
+
+    Used when the user edits a message mid-conversation so that everything
+    after the edited point is removed from persistent storage.
+    """
+    conn = _connect()
+    if keep_count <= 0:
+        conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+    else:
+        rows = conn.execute(
+            "SELECT id FROM chat_messages WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+            (session_id, keep_count),
+        ).fetchall()
+        if rows:
+            last_keep_id = rows[-1]["id"]
+            conn.execute(
+                "DELETE FROM chat_messages WHERE session_id = ? AND id > ?",
+                (session_id, last_keep_id),
+            )
+        # If the session has fewer messages than keep_count, nothing to delete.
+    conn.commit()
+    conn.close()

@@ -15,6 +15,17 @@ import matplotlib.pyplot as plt
 # deposits its reply here so it can be re-displayed if the session is reopened.
 _bg_results: dict[int, str] = {}
 _bg_lock = threading.Lock()
+
+# Tracks sessions that currently have a worker thread in flight.
+# Used by newly-opened dialogs to show a typing indicator for in-progress requests.
+_pending_sessions: set[int] = set()
+
+# Maps session_id -> "deliver reply" callable for whichever dialog is currently open.
+# Replaces the old dlg.open check so the worker can reach the *current* dialog even
+# when the user closed and reopened (or navigated to history and back).
+_active_callbacks: dict[int, callable] = {}
+
+_sessions_meta_lock = threading.Lock()
 import pandas as pd
 
 import database as db
@@ -574,31 +585,187 @@ def _open_ai_chat(
     current_session = [session_id]
     conv_history = list(history)
     is_typing = [False]
-    # Track (history_index, bubble_Row) for edit truncation
-    bubble_map: list[tuple[int, ft.Control]] = []  # kept for potential future use
+    # True when a static welcome bubble was injected (new chats only).
+    # Needed to compute the DB offset when truncating after an inline edit.
+    _has_welcome = [not bool(history)]
+    # (history_index, outer_row) — used by _edit_and_resend for truncation
+    bubble_map: list[tuple[int, ft.Control]] = []
+    # Set to True when the user presses the stop button.
+    # The worker checks this after its blocking API call returns and discards
+    # the reply if True (it cannot interrupt the network call itself).
+    _stop_requested = [False]
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
 
+    def _edit_and_resend(hist_idx: int, bubble_row: ft.Control, new_text: str) -> None:
+        """Truncate conversation from hist_idx onward, then resend with new_text."""
+        if is_typing[0]:
+            return
+
+        # Remove this bubble and everything after it from the UI
+        try:
+            bubble_pos = messages_col.controls.index(bubble_row)
+        except ValueError:
+            return
+        messages_col.controls = messages_col.controls[:bubble_pos]
+
+        # Slice in-memory history — drop the old user message and all replies after it
+        conv_history[:] = conv_history[:hist_idx]
+
+        # Keep bubble_map in sync
+        bubble_map[:] = [(i, c) for (i, c) in bubble_map if i < hist_idx]
+
+        # Trim persisted messages so the DB matches the truncated history.
+        # The welcome message (index 0) is never written to the DB, so we subtract 1
+        # for fresh chats.
+        if current_session[0] is not None:
+            db_keep = hist_idx - (1 if _has_welcome[0] else 0)
+            db.truncate_chat_messages_after_index(current_session[0], db_keep)
+
+        page.update()
+        _send(new_text)
+
     def _add_user_bubble(text: str, hist_idx: int) -> None:
-        """Append a user bubble. Edit fills the input field; Copy writes to clipboard."""
-        def _on_edit(t: str) -> None:
-            if is_typing[0]:
-                return
-            input_field.value = t
-            input_field.focus()
+        """Append a user bubble with inline edit-and-resend support."""
+        current_text = [text]
+
+        msg_col = ft.Column(
+            spacing=2,
+            horizontal_alignment=ft.CrossAxisAlignment.END,
+        )
+        outer_row = ft.Row(
+            alignment=ft.MainAxisAlignment.END,
+            vertical_alignment=ft.CrossAxisAlignment.END,
+            controls=[ft.Container(expand=True), msg_col],
+        )
+
+        btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
+        btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
+
+        def _render_view() -> None:
+            msg_col.controls = [
+                ft.Container(
+                    width=bubble_w,
+                    content=ft.Text(
+                        current_text[0], selectable=True, size=13, color=ft.Colors.WHITE
+                    ),
+                    padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+                    bgcolor="#0369a1",
+                    border_radius=ft.BorderRadius(
+                        top_left=14, top_right=4, bottom_left=14, bottom_right=14
+                    ),
+                    margin=ft.Margin(bottom=2, top=0, left=0, right=0),
+                ),
+                ft.Row(
+                    spacing=0,
+                    alignment=ft.MainAxisAlignment.END,
+                    controls=[
+                        ft.TextButton(
+                            content=ft.Row(
+                                spacing=3,
+                                controls=[
+                                    ft.Icon(ft.Icons.EDIT_OUTLINED, size=11, color=btn_color),
+                                    ft.Text("Edit", size=10, color=btn_color),
+                                ],
+                            ),
+                            on_click=lambda _: _render_edit(),
+                            style=btn_style,
+                            tooltip="Edit and resend",
+                        ),
+                        ft.TextButton(
+                            content=ft.Row(
+                                spacing=3,
+                                controls=[
+                                    ft.Icon(ft.Icons.COPY_OUTLINED, size=11, color=btn_color),
+                                    ft.Text("Copy", size=10, color=btn_color),
+                                ],
+                            ),
+                            on_click=lambda _: _do_copy(),
+                            style=btn_style,
+                            tooltip="Copy message",
+                        ),
+                    ],
+                ),
+            ]
             page.update()
 
-        def _on_copy(t: str) -> None:
-            page.set_clipboard(t)
-            page.snack_bar = ft.SnackBar(
-                ft.Text("Message copied!"), duration=1500
+        def _render_edit() -> None:
+            if is_typing[0]:
+                return
+
+            ef = ft.TextField(
+                value=current_text[0],
+                multiline=True,
+                min_lines=1,
+                max_lines=6,
+                text_size=13,
+                autofocus=True,
+                border_radius=12,
+                border_color="#334155",
+                focused_border_color="#0ea5e9",
+                expand=True,
             )
+
+            def _confirm(_=None) -> None:
+                new_text = (ef.value or "").strip()
+                if not new_text:
+                    return
+                current_text[0] = new_text
+                _render_view()
+                _edit_and_resend(hist_idx, outer_row, new_text)
+
+            ef.on_submit = lambda e: _confirm()
+
+            msg_col.controls = [
+                ft.Container(
+                    width=bubble_w,
+                    bgcolor="#0f172a",
+                    border_radius=12,
+                    padding=ft.padding.all(8),
+                    border=ft.border.all(1, "#334155"),
+                    content=ft.Column(
+                        spacing=6,
+                        controls=[
+                            ef,
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.END,
+                                spacing=6,
+                                controls=[
+                                    ft.TextButton(
+                                        "Cancel",
+                                        on_click=lambda _: _render_view(),
+                                        style=ft.ButtonStyle(
+                                            color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)
+                                        ),
+                                    ),
+                                    ft.FilledButton(
+                                        "Send edit",
+                                        icon=ft.Icons.SEND_ROUNDED,
+                                        on_click=_confirm,
+                                        style=ft.ButtonStyle(
+                                            bgcolor="#0369a1",
+                                            color=ft.Colors.WHITE,
+                                            shape=ft.RoundedRectangleBorder(radius=10),
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                )
+            ]
+            page.update()
+            ef.focus()
+
+        def _do_copy() -> None:
+            page.set_clipboard(current_text[0])
+            page.snack_bar = ft.SnackBar(ft.Text("Message copied!"), duration=1500)
             page.snack_bar.open = True
             page.update()
 
-        ctrl = _user_bubble(text, bubble_w, on_edit=_on_edit, on_copy=_on_copy)
-        bubble_map.append((hist_idx, ctrl))
-        messages_col.controls.append(ctrl)
+        _render_view()
+        bubble_map.append((hist_idx, outer_row))
+        messages_col.controls.append(outer_row)
 
     def _add_ai_bubble(text: str) -> None:
         messages_col.controls.append(_ai_bubble(text, bubble_w))
@@ -610,13 +777,36 @@ def _open_ai_chat(
         else:
             _add_user_bubble(msg["content"], idx)
 
-    # Check if this session has a completed background reply waiting
+    # ── Handle sessions that have (or had) a running worker ───────────────────
     if session_id is not None:
+        # Register callback first so the worker can find us if it finishes
+        # *after* we've initialised (the key race condition we're fixing).
+        _register_callback(session_id)
+
+        # Check if a completed reply was parked while no dialog was open.
         with _bg_lock:
             pending_reply = _bg_results.pop(session_id, None)
+
         if pending_reply is not None:
-            conv_history.append({"role": "assistant", "content": pending_reply})
-            _add_ai_bubble(pending_reply)
+            # Guard: only show if not already the last message in history
+            already_there = (
+                conv_history
+                and conv_history[-1].get("role") == "assistant"
+                and conv_history[-1].get("content") == pending_reply
+            )
+            if not already_there:
+                conv_history.append({"role": "assistant", "content": pending_reply})
+                _add_ai_bubble(pending_reply)
+        else:
+            # Check if a worker is still in flight for this session.
+            with _sessions_meta_lock:
+                worker_running = session_id in _pending_sessions
+            if worker_running:
+                # Show typing indicator — the worker will deliver via callback.
+                is_typing[0] = True
+                _set_input_enabled(False)
+                if typing_ind not in messages_col.controls:
+                    messages_col.controls.append(typing_ind)
 
     # For brand-new chats show a static welcome
     if not conv_history:
@@ -641,15 +831,73 @@ def _open_ai_chat(
         on_click=lambda _: _send(input_field.value),
     )
 
+    stop_btn = ft.IconButton(
+        icon=ft.Icons.STOP_CIRCLE_OUTLINED,
+        icon_color="#f87171",
+        icon_size=22,
+        tooltip="Stop responding",
+        visible=False,
+        on_click=lambda _: _stop_thinking(),
+    )
+
     typing_ind = _typing_bubble()
 
+    def _update_stop_btn_visibility() -> None:
+        stop_btn.visible = is_typing[0]
+        send_btn.visible = not is_typing[0]
+
     def _set_input_enabled(enabled: bool) -> None:
-        send_btn.disabled = not enabled
         input_field.disabled = not enabled
+        _update_stop_btn_visibility()
+
+    def _stop_thinking() -> None:
+        """User pressed stop — signal the worker to discard its reply."""
+        if not is_typing[0]:
+            return
+        _stop_requested[0] = True
+        # Reset UI immediately so the user knows we heard them
+        is_typing[0] = False
+        _set_input_enabled(True)
+        if typing_ind in messages_col.controls:
+            messages_col.controls.remove(typing_ind)
+        page.update()
+
+    # ------------------------------------------------------------------
+    # Session / callback helpers
+    # ------------------------------------------------------------------
+
+    def _register_callback(sid: int) -> None:
+        """Register this dialog as the delivery target for sid's reply."""
+        def _deliver(reply: str) -> None:
+            # Guard: if already in conv_history (fast-path DB read beat us), skip.
+            if (conv_history
+                    and conv_history[-1].get("role") == "assistant"
+                    and conv_history[-1].get("content") == reply):
+                return
+            conv_history.append({"role": "assistant", "content": reply})
+            is_typing[0] = False
+            _set_input_enabled(True)
+            if typing_ind in messages_col.controls:
+                messages_col.controls.remove(typing_ind)
+            if dlg.open:
+                _add_ai_bubble(reply)
+                page.update()
+            else:
+                # Dialog was closed again before the reply arrived — park it.
+                with _bg_lock:
+                    _bg_results[sid] = reply
+
+        with _sessions_meta_lock:
+            _active_callbacks[sid] = _deliver
+
+    def _unregister_callback(sid: int) -> None:
+        with _sessions_meta_lock:
+            _active_callbacks.pop(sid, None)
 
     def _ensure_session() -> int:
         if current_session[0] is None:
             current_session[0] = db.create_chat_session("New Chat")
+            _register_callback(current_session[0])
         return current_session[0]
 
     def _send(text: str) -> None:
@@ -667,16 +915,31 @@ def _open_ai_chat(
         sid = _ensure_session()
         db.save_chat_message(sid, "user", text)
 
-        # Show typing indicator and disable input — single update
+        # Show typing indicator and disable input
         is_typing[0] = True
+        _stop_requested[0] = False
         _set_input_enabled(False)
+        with _sessions_meta_lock:
+            _pending_sessions.add(sid)
         if typing_ind not in messages_col.controls:
             messages_col.controls.append(typing_ind)
         page.update()
 
         def _worker():
             reply = chat_with_ai(list(conv_history), financial_context, api_key)
-            conv_history.append({"role": "assistant", "content": reply})
+
+            # ── Remove from in-flight set ──────────────────────────────────
+            with _sessions_meta_lock:
+                _pending_sessions.discard(sid)
+                callback = _active_callbacks.get(sid)
+
+            # ── Check stop ─────────────────────────────────────────────────
+            if _stop_requested[0]:
+                _stop_requested[0] = False
+                # UI was already reset by _stop_thinking; nothing more to do.
+                return
+
+            # ── Persist ────────────────────────────────────────────────────
             db.save_chat_message(sid, "assistant", reply)
 
             # Auto-title on first real user message
@@ -685,18 +948,13 @@ def _open_ai_chat(
                 title = _generate_session_title(user_messages[0]["content"], reply)
                 db.update_chat_session_title(sid, title)
 
-            # --- Atomic UI update ---
-            is_typing[0] = False
-            _set_input_enabled(True)
-            if typing_ind in messages_col.controls:
-                messages_col.controls.remove(typing_ind)
-
-            if dlg.open:
-                # Dialog still open — show reply directly
-                _add_ai_bubble(reply)
-                page.update()
+            # ── Deliver ─────────────────────────────────────────────────────
+            # If a dialog is open for this session (could be a *new* dialog the
+            # user opened after closing the original one), deliver via callback.
+            # Otherwise park in _bg_results for the next open.
+            if callback:
+                callback(reply)
             else:
-                # Dialog was closed — park reply so it appears when session is reopened
                 with _bg_lock:
                     _bg_results[sid] = reply
 
@@ -735,8 +993,11 @@ def _open_ai_chat(
                     ft.Divider(height=1, color="#1e293b"),
                     ft.Container(
                         padding=ft.Padding(left=8, right=8, top=8, bottom=8),
-                        content=ft.Row(spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                       controls=[input_field, send_btn]),
+                        content=ft.Row(
+                            spacing=6,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[input_field, stop_btn, send_btn],
+                        ),
                     ),
                 ],
             ),
@@ -746,6 +1007,9 @@ def _open_ai_chat(
 
     def _close():
         dlg.open = False
+        # Unregister so the worker falls back to _bg_results if it finishes after close.
+        if current_session[0] is not None:
+            _unregister_callback(current_session[0])
         page.update()
 
     page.overlay.append(dlg)
