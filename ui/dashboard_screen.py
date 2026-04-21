@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 import threading
+from datetime import date
 from io import BytesIO
 
 import flet as ft
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
 import matplotlib.pyplot as plt
 import pandas as pd
 
@@ -670,48 +673,188 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     pie_b64 = _build_pie_chart(expense_map)
     line_b64 = _build_line_chart(db.get_expenses_last_days(30))
 
-    # Get budget limits for AI context
+    # -----------------------------------------------------------------------
+    # Build enriched AI context
+    # -----------------------------------------------------------------------
+    today = date.today()
+    today_str = today.isoformat()
+
+    # --- Budgets with full date / duration info ---
     budget_limits = db.get_budget_limits()
-    budget_info = {}
-    budget_status = {}
-    
+    budget_lines: list[str] = []
     for budget in budget_limits:
         category = budget.category
         limit = budget.monthly_limit
         spent = expense_map.get(category, 0.0)
-        remaining = limit - spent
-        percentage_used = (spent / limit * 100) if limit > 0 else 0
-        
-        budget_info[category] = {
-            "limit": limit,
-            "spent": spent,
-            "remaining": remaining,
-            "percentage_used": percentage_used
-        }
-        
-        # Determine budget status
-        if percentage_used >= 100:
+        remaining_money = limit - spent
+        pct = (spent / limit * 100) if limit > 0 else 0
+
+        if pct >= 100:
             status = "Exceeded"
-        elif percentage_used >= 80:
+        elif pct >= 80:
             status = "Warning"
-        elif percentage_used >= 50:
+        elif pct >= 50:
             status = "On Track"
         else:
             status = "Good"
-        
-        budget_status[category] = status
 
+        # Duration / date details
+        # Priority: explicit end_date > month-end calculation > start + duration_days
+        import calendar as _cal
+        from datetime import timedelta as _td
+        duration_desc: str
+        days_left_desc: str
+
+        start_str = budget.start_date or today_str
+
+        if budget.end_date:
+            # --- Case 1: explicit end date always wins, regardless of duration_type ---
+            try:
+                end = date.fromisoformat(budget.end_date)
+                start = date.fromisoformat(start_str)
+                total_days = (end - start).days
+                days_left = (end - today).days
+                duration_desc = (
+                    f"{total_days}-day period "
+                    f"({start_str} → {budget.end_date})"
+                )
+                if days_left > 0:
+                    days_left_desc = (
+                        f"{days_left} day(s) left (ends {budget.end_date})"
+                    )
+                elif days_left == 0:
+                    days_left_desc = f"ends TODAY ({budget.end_date})"
+                else:
+                    days_left_desc = f"ended on {budget.end_date}"
+            except ValueError:
+                duration_desc = f"custom ({start_str} → {budget.end_date})"
+                days_left_desc = "unknown days left"
+
+        elif budget.duration_type == "month":
+            # --- Case 2: monthly budget — end is last day of the start month ---
+            try:
+                sd = date.fromisoformat(start_str)
+                last_day = _cal.monthrange(sd.year, sd.month)[1]
+                end = date(sd.year, sd.month, last_day)
+                days_left = (end - today).days
+                duration_desc = f"monthly (started {start_str}, resets end of {sd.strftime('%b %Y')})"
+                if days_left > 0:
+                    days_left_desc = (
+                        f"{days_left} day(s) left in budget period (ends {end.isoformat()})"
+                    )
+                elif days_left == 0:
+                    days_left_desc = f"ends TODAY ({end.isoformat()})"
+                else:
+                    days_left_desc = "budget period has ended"
+            except ValueError:
+                duration_desc = "monthly"
+                days_left_desc = "unknown days left"
+
+        else:
+            # --- Case 3: fixed custom duration — compute end from start + days ---
+            try:
+                start = date.fromisoformat(start_str)
+                end = start + _td(days=max(1, budget.duration_days))
+                days_left = (end - today).days
+                duration_desc = (
+                    f"{budget.duration_days}-day period "
+                    f"(started {start_str}, ends {end.isoformat()})"
+                )
+                if days_left > 0:
+                    days_left_desc = f"{days_left} day(s) left (ends {end.isoformat()})"
+                elif days_left == 0:
+                    days_left_desc = f"ends TODAY ({end.isoformat()})"
+                else:
+                    days_left_desc = f"ended on {end.isoformat()}"
+            except ValueError:
+                duration_desc = f"{budget.duration_days}-day custom"
+                days_left_desc = "unknown days left"
+
+        budget_lines.append(
+            f"  • {category}: limit={peso(limit)}, spent={peso(spent)}, "
+            f"remaining={peso(remaining_money)}, {pct:.0f}% used, status={status}, "
+            f"duration={duration_desc}, {days_left_desc}"
+        )
+
+    budgets_section = (
+        "\n".join(budget_lines) if budget_lines else "  (no budgets set)"
+    )
+
+    # --- Recent transactions (last 20) ---
+    recent_txns = db.get_transactions()[:20]
+    txn_lines: list[str] = []
+    for t in recent_txns:
+        sign = "+" if t.txn_type == "income" else "-"
+        desc = f" ({t.description})" if t.description else ""
+        txn_lines.append(
+            f"  • [{t.txn_date}] {sign}{peso(t.amount)} | {t.category}{desc}"
+        )
+    txns_section = "\n".join(txn_lines) if txn_lines else "  (no transactions yet)"
+
+    # --- Recurring transactions with next-occurrence details ---
+    recurring = db.get_recurring_transactions()
+    rec_lines: list[str] = []
+    for r in recurring:
+        active_label = "active" if r.active else "paused"
+        try:
+            next_d = date.fromisoformat(r.next_date)
+            days_until = (next_d - today).days
+            if days_until < 0:
+                timing = f"overdue since {r.next_date} ({abs(days_until)} day(s) ago)"
+            elif days_until == 0:
+                timing = "due TODAY"
+            elif days_until == 1:
+                timing = "due TOMORROW"
+            else:
+                timing = f"next on {r.next_date} ({days_until} day(s) from now)"
+        except ValueError:
+            timing = f"next on {r.next_date}"
+
+        freq_label = r.frequency
+        if r.frequency == "custom":
+            freq_label = f"every {r.frequency_days} day(s)"
+
+        sign = "+" if r.txn_type == "income" else "-"
+        desc = f" ({r.description})" if r.description else ""
+        rec_lines.append(
+            f"  • {r.category}{desc}: {sign}{peso(r.amount)}, "
+            f"{freq_label}, {timing}, started {r.start_date}, [{active_label}]"
+        )
+    rec_section = "\n".join(rec_lines) if rec_lines else "  (no recurring transactions)"
+
+    # --- Settings summary ---
+    starting_balance = db.get_starting_balance()
+    api_key_set = bool(db.get_anthropic_api_key())
+    settings_section = (
+        f"  Currency: {currency_code}\n"
+        f"  Starting balance: {peso(starting_balance)}\n"
+        f"  Anthropic API key configured: {'Yes' if api_key_set else 'No'}"
+    )
+
+    # --- Assemble full context ---
     financial_context = (
+        f"Today's date: {today_str}\n"
         f"Currency: {currency_code}\n"
-        f"Month: {month}\n"
+        f"Current month: {month}\n\n"
+        f"=== BALANCE & CASHFLOW ===\n"
         f"Current balance: {peso(balance)}\n"
-        f"Total spent this month: {peso(month_total)}\n"
+        f"Starting balance: {peso(starting_balance)}\n"
         f"Income this month: {peso(month_income)}\n"
-        f"Net cashflow: {peso(net_cashflow)}\n"
-        f"Biggest spending category: {biggest_category} ({peso(biggest_value)})\n"
-        f"Full category breakdown: {expense_map}\n"
-        f"Budget limits and status: {budget_info}\n"
-        f"Budget alerts: {budget_status}"
+        f"Spent this month: {peso(month_total)}\n"
+        f"Net cashflow this month: {peso(net_cashflow)}\n"
+        f"Biggest spending category: {biggest_category} ({peso(biggest_value)})\n\n"
+        f"=== SPENDING BY CATEGORY (this month) ===\n"
+        + "\n".join(
+            f"  • {cat}: {peso(amt)}" for cat, amt in expense_map.items()
+        ) + "\n\n"
+        f"=== BUDGET LIMITS & TRACKING ===\n"
+        f"{budgets_section}\n\n"
+        f"=== RECENT TRANSACTIONS (last 20) ===\n"
+        f"{txns_section}\n\n"
+        f"=== RECURRING TRANSACTIONS ===\n"
+        f"{rec_section}\n\n"
+        f"=== APP SETTINGS ===\n"
+        f"{settings_section}"
     )
 
     def open_ai_chat(_):
