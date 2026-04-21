@@ -7,82 +7,235 @@ from io import BytesIO
 
 import flet as ft
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
 
-# Background AI responses keyed by session_id.
-# When the chat dialog is closed while AI is still working, the worker
-# deposits its reply here so it can be re-displayed if the session is reopened.
 _bg_results: dict[int, str] = {}
 _bg_lock = threading.Lock()
-
-# Tracks sessions that currently have a worker thread in flight.
-# Used by newly-opened dialogs to show a typing indicator for in-progress requests.
 _pending_sessions: set[int] = set()
-
-# Maps session_id -> "deliver reply" callable for whichever dialog is currently open.
-# Replaces the old dlg.open check so the worker can reach the *current* dialog even
-# when the user closed and reopened (or navigated to history and back).
 _active_callbacks: dict[int, callable] = {}
-
 _sessions_meta_lock = threading.Lock()
-import pandas as pd
 
+import pandas as pd
 import database as db
 from ai_insights import chat_with_ai
 from ui.constants import now_month, make_peso
 
 
-def _fig_to_b64() -> str:
+# ---------------------------------------------------------------------------
+# Chart helpers — professional dark-theme matplotlib charts
+# ---------------------------------------------------------------------------
+
+_PALETTE = ["#38bdf8", "#818cf8", "#fb923c", "#34d399", "#f472b6",
+            "#fbbf24", "#a78bfa", "#22d3ee", "#4ade80", "#f87171"]
+
+
+def _fig_to_b64(fig) -> str:
     buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="#111827")
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                facecolor=fig.get_facecolor(), transparent=False)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 
 
-def _build_pie_chart(expense_map: dict[str, float]) -> str | None:
+def _build_donut_chart(expense_map: dict[str, float]) -> str | None:
     if not expense_map:
         return None
-    df = pd.DataFrame(
-        [{"category": k, "amount": v} for k, v in expense_map.items()],
-        columns=["category", "amount"],
+
+    # Keep top 7, group rest as "Others"
+    sorted_items = sorted(expense_map.items(), key=lambda x: x[1], reverse=True)
+    if len(sorted_items) > 7:
+        top = sorted_items[:7]
+        others = sum(v for _, v in sorted_items[7:])
+        top.append(("Others", others))
+        sorted_items = top
+
+    labels = [k for k, _ in sorted_items]
+    values = [v for _, v in sorted_items]
+    total = sum(values)
+    colors = _PALETTE[:len(labels)]
+
+    bg = "#0f172a"
+    fig, ax = plt.subplots(figsize=(5.2, 3.6), facecolor=bg)
+    ax.set_facecolor(bg)
+
+    wedges, _ = ax.pie(
+        values,
+        colors=colors,
+        startangle=90,
+        wedgeprops=dict(width=0.55, edgecolor=bg, linewidth=2),
     )
-    fig, ax = plt.subplots(figsize=(4.5, 3.2), facecolor="#111827")
-    ax.pie(
-        df["amount"],
-        labels=df["category"],
-        autopct="%1.0f%%",
-        startangle=140,
-        textprops={"color": "white", "fontsize": 8},
+
+    # Center label
+    ax.text(0, 0.08, "Total", ha="center", va="center",
+            color="#94a3b8", fontsize=9, fontweight="normal")
+    ax.text(0, -0.18, f"{total:,.0f}", ha="center", va="center",
+            color="white", fontsize=13, fontweight="bold")
+
+    # Legend on right
+    legend_items = [
+        mpatches.Patch(color=colors[i], label=f"{labels[i][:18]}  {values[i]/total*100:.0f}%")
+        for i in range(len(labels))
+    ]
+    ax.legend(
+        handles=legend_items,
+        loc="center left",
+        bbox_to_anchor=(1.0, 0.5),
+        fontsize=7.5,
+        frameon=False,
+        labelcolor="white",
+        handlelength=1.2,
+        handleheight=1.0,
     )
-    ax.set_title("Monthly Category Breakdown", color="white", fontsize=10)
-    b64 = _fig_to_b64()
+
+    ax.set_title("Spending by Category", color="white", fontsize=11,
+                 fontweight="bold", pad=10)
+    fig.subplots_adjust(left=0.02, right=0.72)
+
+    b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
 
 
-def _build_line_chart(points: list[tuple[str, float]]) -> str | None:
+def _build_area_line_chart(points: list[tuple[str, float]]) -> str | None:
     if not points:
         return None
+
     df = pd.DataFrame(points, columns=["date", "amount"])
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date")
-    fig, ax = plt.subplots(figsize=(4.8, 2.8), facecolor="#111827")
-    ax.plot(df["date"], df["amount"], linewidth=2.2, marker="o", color="#38bdf8")
-    ax.set_title("Spending Trend (Last 30 Days)", color="white", fontsize=10)
-    ax.tick_params(colors="white", labelsize=7)
-    ax.set_facecolor("#111827")
-    ax.grid(alpha=0.25)
+
+    bg = "#0f172a"
+    fig, ax = plt.subplots(figsize=(5.4, 2.9), facecolor=bg)
+    ax.set_facecolor(bg)
+
+    x = np.arange(len(df))
+    y = df["amount"].values
+
+    # Smooth gradient fill
+    ax.fill_between(x, y, alpha=0.25, color="#38bdf8")
+    ax.fill_between(x, y, alpha=0.10, color="#818cf8")
+    ax.plot(x, y, color="#38bdf8", linewidth=2.2, zorder=3)
+    ax.scatter(x, y, color="#38bdf8", s=28, zorder=4, edgecolors=bg, linewidths=1.5)
+
+    # Highlight max point
+    if len(y) > 0:
+        max_idx = int(np.argmax(y))
+        ax.scatter([x[max_idx]], [y[max_idx]], color="#f472b6", s=55, zorder=5,
+                   edgecolors=bg, linewidths=1.5)
+        ax.annotate(f"{y[max_idx]:,.0f}",
+                    (x[max_idx], y[max_idx]),
+                    textcoords="offset points", xytext=(0, 10),
+                    color="#f472b6", fontsize=7.5, ha="center", fontweight="bold")
+
+    # X-axis ticks — show every ~5th date
+    step = max(1, len(df) // 6)
+    tick_positions = x[::step]
+    tick_labels = [df["date"].iloc[i].strftime("%b %d") for i in range(0, len(df), step)]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, color="#64748b", fontsize=7.5, rotation=0)
+    ax.tick_params(axis="y", colors="#64748b", labelsize=7.5)
+    ax.tick_params(axis="x", length=0)
+    ax.tick_params(axis="y", length=0)
+
+    ax.set_facecolor(bg)
+    ax.grid(axis="y", alpha=0.12, color="#334155", linestyle="--")
+    ax.set_axisbelow(True)
     for spine in ax.spines.values():
-        spine.set_color("#334155")
-    b64 = _fig_to_b64()
+        spine.set_visible(False)
+
+    ax.set_title("Daily Spending — Last 30 Days", color="white", fontsize=11,
+                 fontweight="bold", pad=10)
+
+    b64 = _fig_to_b64(fig)
+    plt.close(fig)
+    return b64
+
+
+def _build_bar_chart(expense_map: dict[str, float]) -> str | None:
+    if not expense_map:
+        return None
+
+    sorted_items = sorted(expense_map.items(), key=lambda x: x[1], reverse=True)[:8]
+    labels = [k for k, _ in sorted_items]
+    values = [v for _, v in sorted_items]
+
+    # Shorten long labels
+    short_labels = [lb[:20] + "…" if len(lb) > 20 else lb for lb in labels]
+
+    bg = "#0f172a"
+    fig, ax = plt.subplots(figsize=(5.4, max(2.6, len(labels) * 0.42)), facecolor=bg)
+    ax.set_facecolor(bg)
+
+    y_pos = np.arange(len(labels))
+    bar_colors = _PALETTE[:len(labels)]
+
+    bars = ax.barh(y_pos, values, color=bar_colors, height=0.55,
+                   edgecolor="none", zorder=2)
+
+    # Value labels inside bars
+    max_val = max(values) if values else 1
+    for bar, val, color in zip(bars, values, bar_colors):
+        label_x = bar.get_width() + max_val * 0.02
+        ax.text(label_x, bar.get_y() + bar.get_height() / 2,
+                f"{val:,.0f}", va="center", ha="left",
+                color=color, fontsize=8, fontweight="bold")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(short_labels, color="#cbd5e1", fontsize=8.5)
+    ax.invert_yaxis()
+    ax.tick_params(axis="x", colors="#475569", labelsize=7.5, length=0)
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlim(0, max_val * 1.32)
+    ax.grid(axis="x", alpha=0.10, color="#334155", linestyle="--")
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title("Top Spending Categories", color="white", fontsize=11,
+                 fontweight="bold", pad=10)
+
+    fig.tight_layout(pad=1.2)
+    b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
 
 
 # ---------------------------------------------------------------------------
+# Clipboard helper — works across Flet versions
+# ---------------------------------------------------------------------------
+
+def _copy_to_clipboard(page: ft.Page, text: str) -> bool:
+    """Try every known clipboard API. Returns True if successful."""
+    # Modern Flet
+    if hasattr(page, "set_clipboard"):
+        try:
+            page.set_clipboard(text)
+            return True
+        except Exception:
+            pass
+    # Older Flet
+    if hasattr(page, "clipboard"):
+        try:
+            page.clipboard = text
+            page.update()
+            return True
+        except Exception:
+            pass
+    # System fallback
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+        return True
+    except Exception:
+        pass
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Chat bubble helpers
-# bubble_w = pixel width passed in from dialog so Text wraps correctly
 # ---------------------------------------------------------------------------
 
 def _ai_bubble(text: str, bubble_w: int) -> ft.Control:
@@ -90,143 +243,22 @@ def _ai_bubble(text: str, bubble_w: int) -> ft.Control:
         alignment=ft.MainAxisAlignment.START,
         vertical_alignment=ft.CrossAxisAlignment.START,
         controls=[
-            ft.Text("🤖", size=18),
+            ft.Container(
+                width=34, height=34, border_radius=17,
+                bgcolor="#1e3a5f",
+                alignment=ft.Alignment(0, 0),
+                content=ft.Text("🤖", size=16),
+            ),
             ft.Container(
                 width=bubble_w,
                 content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
-                padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+                padding=ft.Padding(left=14, right=14, top=10, bottom=10),
                 bgcolor="#1e293b",
-                border_radius=ft.BorderRadius(top_left=4, top_right=14, bottom_left=14, bottom_right=14),
-                margin=ft.Margin(bottom=10, top=0, left=6, right=0),
+                border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
+                margin=ft.Margin(bottom=10, top=0, left=8, right=0),
             ),
         ],
     )
-
-
-def _user_bubble(text: str, bubble_w: int, on_edit=None, on_copy=None) -> ft.Control:
-    """User chat bubble with optional Edit (fills input) and Copy (clipboard) buttons."""
-    btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
-    btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
-
-    action_btns: list[ft.Control] = []
-    if on_edit:
-        action_btns.append(
-            ft.TextButton(
-                content=ft.Row(
-                    spacing=3,
-                    controls=[
-                        ft.Icon(ft.Icons.EDIT_OUTLINED, size=11, color=btn_color),
-                        ft.Text("Edit", size=10, color=btn_color),
-                    ],
-                ),
-                on_click=lambda _: on_edit(text),
-                style=btn_style,
-                tooltip="Copy to input to re-ask",
-            )
-        )
-    if on_copy:
-        action_btns.append(
-            ft.TextButton(
-                content=ft.Row(
-                    spacing=3,
-                    controls=[
-                        ft.Icon(ft.Icons.COPY_OUTLINED, size=11, color=btn_color),
-                        ft.Text("Copy", size=10, color=btn_color),
-                    ],
-                ),
-                on_click=lambda _: on_copy(text),
-                style=btn_style,
-                tooltip="Copy message text",
-            )
-        )
-
-    action_row = ft.Row(
-        spacing=0,
-        alignment=ft.MainAxisAlignment.END,
-        controls=action_btns,
-    ) if action_btns else ft.Container(height=0)
-
-    return ft.Row(
-        alignment=ft.MainAxisAlignment.END,
-        vertical_alignment=ft.CrossAxisAlignment.END,
-        controls=[
-            ft.Container(expand=True),
-            ft.Column(
-                spacing=2,
-                horizontal_alignment=ft.CrossAxisAlignment.END,
-                controls=[
-                    ft.Container(
-                        width=bubble_w,
-                        content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
-                        padding=ft.Padding(left=12, right=12, top=8, bottom=8),
-                        bgcolor="#0369a1",
-                        border_radius=ft.BorderRadius(
-                            top_left=14, top_right=4,
-                            bottom_left=14, bottom_right=14,
-                        ),
-                        margin=ft.Margin(bottom=2, top=0, left=0, right=0),
-                    ),
-                    action_row,
-                ],
-            ),
-        ],
-    )
-
-
-def _generate_session_title(user_message: str, ai_reply: str) -> str:
-    """Generate a smart session title based on conversation content."""
-    user_lower = user_message.lower()
-    ai_lower = ai_reply.lower()
-    
-    # Common conversation types and budget topics
-    topics = {
-        # Greetings and General Conversations
-        "Casual Greeting": ["hello", "hi", "hey", "how are you", "good morning", "good afternoon", "good evening"],
-        "Introduction": ["my name is", "i'm", "i am", "introduction", "about me"],
-        "Small Talk": ["how's your day", "what's up", "what are you doing", "nice to meet you"],
-        
-        # Budget Topics
-        "Budget Planning": ["budget", "plan", "planning", "create budget", "monthly budget"],
-        "Savings Goals": ["save", "saving", "goal", "goals", "set aside", "emergency fund"],
-        "Expense Analysis": ["spending", "expenses", "expense", "where did i spend", "track expenses"],
-        "Income Questions": ["income", "salary", "earn", "revenue", "make money"],
-        "Investment": ["invest", "investment", "stocks", "crypto", "portfolio"],
-        "Debt Management": ["debt", "loan", "credit card", "pay off", "borrow"],
-        "Monthly Review": ["month", "review", "summary", "report", "overview"],
-        "Category Spending": ["category", "food", "transport", "utilities", "entertainment"],
-        "Financial Advice": ["advice", "help", "should i", "recommend", "suggest"],
-        
-        # Help and Support
-        "Help Request": ["help", "can you", "how do i", "what is", "explain", "tell me"],
-        "Questions": ["question", "what", "when", "where", "why", "how", "which"],
-        "General Chat": ["chat", "talk", "conversation", "discuss"],
-    }
-    
-    # Check for topic matches in user message
-    for topic, keywords in topics.items():
-        if any(keyword in user_lower for keyword in keywords):
-            # Extract key info for more specific title
-            if topic == "Category Spending":
-                for category in ["food", "transport", "utilities", "entertainment", "shopping", "bills"]:
-                    if category in user_lower:
-                        return f"{category.title()} Spending"
-            elif topic == "Monthly Review":
-                # Try to extract month info
-                months = ["january", "february", "march", "april", "may", "june",
-                         "july", "august", "september", "october", "november", "december"]
-                for month in months:
-                    if month in user_lower:
-                        return f"{month.title()} Review"
-            return topic
-    
-    # Fallback: use first meaningful words from user message
-    words = user_message.split()
-    if len(words) >= 3:
-        title = " ".join(words[:3])
-    else:
-        title = user_message
-    
-    return title[:55].rstrip() + ("..." if len(title) > 55 else "")
 
 
 def _typing_bubble() -> ft.Control:
@@ -234,24 +266,55 @@ def _typing_bubble() -> ft.Control:
         alignment=ft.MainAxisAlignment.START,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
-            ft.Text("🤖", size=18),
             ft.Container(
+                width=34, height=34, border_radius=17,
+                bgcolor="#1e3a5f",
+                alignment=ft.Alignment(0, 0),
+                content=ft.Text("🤖", size=16),
+            ),
+            ft.Container(
+                margin=ft.Margin(left=8, bottom=10, top=0, right=0),
                 content=ft.Row(
                     spacing=6,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
-                        ft.ProgressRing(width=12, height=12, stroke_width=2),
+                        ft.ProgressRing(width=12, height=12, stroke_width=2, color="#38bdf8"),
                         ft.Text("AI is thinking…", size=12, italic=True,
                                 color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)),
                     ],
                 ),
-                padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+                padding=ft.Padding(left=14, right=14, top=10, bottom=10),
                 bgcolor="#1e293b",
-                border_radius=ft.BorderRadius(top_left=4, top_right=14, bottom_left=14, bottom_right=14),
-                margin=ft.Margin(bottom=10, top=0, left=6, right=0),
+                border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
             ),
         ],
     )
+
+
+def _generate_session_title(user_message: str, ai_reply: str) -> str:
+    user_lower = user_message.lower()
+    topics = {
+        "Budget Planning": ["budget", "plan", "planning", "monthly budget"],
+        "Savings Goals": ["save", "saving", "goal", "emergency fund"],
+        "Expense Analysis": ["spending", "expenses", "expense", "track expenses"],
+        "Income Questions": ["income", "salary", "earn", "revenue"],
+        "Investment": ["invest", "investment", "stocks", "crypto"],
+        "Debt Management": ["debt", "loan", "credit card", "pay off"],
+        "Monthly Review": ["month", "review", "summary", "report"],
+        "Category Spending": ["category", "food", "transport", "utilities"],
+        "Financial Advice": ["advice", "help", "should i", "recommend"],
+        "Questions": ["what", "when", "where", "why", "how"],
+    }
+    for topic, keywords in topics.items():
+        if any(keyword in user_lower for keyword in keywords):
+            if topic == "Category Spending":
+                for cat in ["food", "transport", "utilities", "entertainment", "shopping"]:
+                    if cat in user_lower:
+                        return f"{cat.title()} Spending"
+            return topic
+    words = user_message.split()
+    title = " ".join(words[:4]) if len(words) >= 4 else user_message
+    return title[:55].rstrip() + ("…" if len(title) > 55 else "")
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +324,6 @@ def _typing_bubble() -> ft.Control:
 def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) -> None:
     sessions_col = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
     storage_text = ft.Text("", size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
-
-    # Multi-select state
     selected_ids: list[int] = []
     session_cards: dict[int, ft.Card] = {}
 
@@ -279,41 +340,28 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
             ],
         ),
         content=ft.Container(
-            width=520,
-            height=480,
+            width=520, height=480,
             content=ft.Column(
-                expand=True,
-                spacing=8,
+                expand=True, spacing=8,
                 controls=[
                     ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                         storage_text,
                         ft.Row(spacing=4, controls=[
                             ft.TextButton("+ New Chat", icon=ft.Icons.ADD, on_click=lambda _: _new_chat()),
-                            ft.TextButton(
-                                "🗑️ Clear All",
-                                icon=ft.Icons.DELETE_FOREVER,
-                                style=ft.ButtonStyle(color=ft.Colors.RED_400),
-                                on_click=lambda _: _confirm_clear_all(),
-                            ),
+                            ft.TextButton("🗑️ Clear All", icon=ft.Icons.DELETE_FOREVER,
+                                          style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                                          on_click=lambda _: _confirm_clear_all()),
                         ]),
                     ]),
                     ft.Divider(height=1),
                     ft.Container(expand=True, content=sessions_col),
-                    # Bulk actions row
-                    ft.Row(
-                        visible=False,
-                        controls=[
-                            ft.TextButton("Select All", on_click=lambda _: _select_all()),
-                            ft.TextButton("Deselect All", on_click=lambda _: _deselect_all()),
-                            ft.ElevatedButton(          # still using ElevatedButton for now (warning is harmless)
-                                "Delete Selected",
-                                icon=ft.Icons.DELETE,
-                                style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
-                                on_click=lambda _: _confirm_delete_selected(),
-                            ),
-                        ],
-                        key="bulk_actions_row",
-                    ),
+                    ft.Row(visible=False, controls=[
+                        ft.TextButton("Select All", on_click=lambda _: _select_all()),
+                        ft.TextButton("Deselect All", on_click=lambda _: _deselect_all()),
+                        ft.ElevatedButton("Delete Selected", icon=ft.Icons.DELETE,
+                                          style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
+                                          on_click=lambda _: _confirm_delete_selected()),
+                    ], key="bulk_actions_row"),
                 ],
             ),
         ),
@@ -337,20 +385,16 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         sessions = db.get_chat_sessions()
         kb = db.get_chat_storage_kb()
         storage_text.value = f"💾 Storage used: {kb} KB"
-
         sessions_col.controls.clear()
         selected_ids.clear()
         session_cards.clear()
 
         if not sessions:
             sessions_col.controls.append(
-                ft.Container(
-                    padding=40,
-                    alignment=ft.Alignment(0, 0),
-                    content=ft.Text("No conversations yet.\nStart a new chat!", 
-                                    text_align=ft.TextAlign.CENTER,
-                                    color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
-                )
+                ft.Container(padding=40, alignment=ft.Alignment(0, 0),
+                             content=ft.Text("No conversations yet.\nStart a new chat!",
+                                             text_align=ft.TextAlign.CENTER,
+                                             color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)))
             )
             _update_bulk_visibility()
             page.update()
@@ -359,55 +403,37 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         for s in sessions:
             sid = s["id"]
             preview = (s["preview"] or "No messages yet")[:85]
-
-            checkbox = ft.Checkbox(value=False, on_change=lambda e, sid=sid: _toggle_select(sid, e.control.value))
-
-            card = ft.Card(
-                content=ft.Container(
-                    padding=12,
-                    content=ft.Row(
-                        controls=[
-                            checkbox,
-                            ft.Column(
-                                expand=True,
-                                spacing=2,
-                                controls=[
-                                    ft.Row(
-                                        spacing=4,
-                                        controls=[
-                                            ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13, expand=True),
-                                            ft.IconButton(
-                                                icon=ft.Icons.EDIT,
-                                                icon_size=16,
-                                                icon_color=ft.Colors.BLUE_300,
-                                                tooltip="Edit title",
-                                                on_click=lambda _, sid=sid, current_title=s["title"]: _edit_title(sid, current_title),
-                                            ),
-                                        ],
-                                    ),
-                                    ft.Text(preview, size=11, color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
-                                    ft.Text(f"{s['created_at'][:16]} · {s['msg_count']} messages",
-                                            size=10, color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)),
-                                ],
-                            ),
-                            ft.IconButton(
-                                icon=ft.Icons.DELETE_OUTLINE,
-                                icon_color=ft.Colors.RED_300,
-                                tooltip="Delete this chat",
-                                on_click=lambda _, sid=sid, title=s["title"]: _confirm_delete(sid, title),
-                            ),
-                        ],
-                    ),
-                    on_click=lambda _, sid=sid: _resume(sid),
-                )
-            )
+            checkbox = ft.Checkbox(value=False,
+                                   on_change=lambda e, sid=sid: _toggle_select(sid, e.control.value))
+            card = ft.Card(content=ft.Container(
+                padding=12,
+                content=ft.Row(controls=[
+                    checkbox,
+                    ft.Column(expand=True, spacing=2, controls=[
+                        ft.Row(spacing=4, controls=[
+                            ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13, expand=True),
+                            ft.IconButton(icon=ft.Icons.EDIT, icon_size=16,
+                                          icon_color=ft.Colors.BLUE_300, tooltip="Edit title",
+                                          on_click=lambda _, sid=sid, t=s["title"]: _edit_title(sid, t)),
+                        ]),
+                        ft.Text(preview, size=11,
+                                color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
+                        ft.Text(f"{s['created_at'][:16]} · {s['msg_count']} messages",
+                                size=10, color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)),
+                    ]),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_300,
+                                  tooltip="Delete",
+                                  on_click=lambda _, sid=sid, title=s["title"]: _confirm_delete(sid, title)),
+                ]),
+                on_click=lambda _, sid=sid: _resume(sid),
+            ))
             session_cards[sid] = card
             sessions_col.controls.append(card)
 
         _update_bulk_visibility()
         page.update()
 
-    def _toggle_select(sid: int, checked: bool):
+    def _toggle_select(sid, checked):
         if checked and sid not in selected_ids:
             selected_ids.append(sid)
         elif not checked and sid in selected_ids:
@@ -431,23 +457,20 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         page.update()
 
     def _update_bulk_visibility():
-        bulk_row = next((c for c in dlg.content.content.controls if getattr(c, "key", None) == "bulk_actions_row"), None)
+        bulk_row = next((c for c in dlg.content.content.controls
+                         if getattr(c, "key", None) == "bulk_actions_row"), None)
         if bulk_row:
             bulk_row.visible = len(selected_ids) > 0
 
-    def _confirm_delete(sid: int, title: str):
-        def _do_delete():
-            db.delete_chat_session(sid)
-            _refresh()
-
+    def _confirm_delete(sid, title):
         confirm = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Delete conversation?"),
-            content=ft.Text(f'"{title}" and all its messages will be permanently deleted.'),
+            modal=True, title=ft.Text("Delete conversation?"),
+            content=ft.Text(f'"{title}" will be permanently deleted.'),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
                 ft.TextButton("Delete", style=ft.ButtonStyle(color=ft.Colors.RED_400),
-                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_delete())),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(),
+                                                  db.delete_chat_session(sid), _refresh())),
             ],
         )
         page.overlay.append(confirm)
@@ -459,14 +482,13 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
             return
         count = len(selected_ids)
         confirm = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Delete selected chats?"),
-            content=ft.Text(f"{count} conversation(s) and all messages will be permanently deleted."),
+            modal=True, title=ft.Text("Delete selected chats?"),
+            content=ft.Text(f"{count} conversation(s) will be permanently deleted."),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
-                ft.TextButton("Delete All Selected",
-                              style=ft.ButtonStyle(color=ft.Colors.RED_400),
-                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_bulk_delete())),
+                ft.TextButton("Delete All Selected", style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(),
+                                                  _do_bulk_delete())),
             ],
         )
         page.overlay.append(confirm)
@@ -481,83 +503,50 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 
     def _confirm_clear_all():
         confirm = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("🗑️ Wipe ALL chat history?"),
-            content=ft.Text("This will permanently delete EVERY conversation and all messages.\n\nThis cannot be undone."),
+            modal=True, title=ft.Text("🗑️ Wipe ALL chat history?"),
+            content=ft.Text("This will permanently delete EVERY conversation.\n\nThis cannot be undone."),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
                 ft.TextButton("Yes, Clear Everything",
                               style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
-                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_clear_all())),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(),
+                                                  db.delete_all_chat_sessions(), _refresh())),
             ],
         )
         page.overlay.append(confirm)
         confirm.open = True
         page.update()
 
-    def _do_clear_all():
-        db.delete_all_chat_sessions()
-        _refresh()
+    def _edit_title(session_id, current_title):
+        title_field = ft.TextField(label="Session Title", value=current_title,
+                                   autofocus=True, max_length=60)
 
-    def _edit_title(session_id: int, current_title: str):
-        title_field = ft.TextField(
-            label="Session Title",
-            value=current_title,
-            autofocus=True,
-            max_length=60,
-        )
-        
+        def _save():
+            new_title = title_field.value.strip()
+            if not new_title:
+                return
+            db.update_chat_session_title(session_id, new_title)
+            edit_dlg.open = False
+            page.update()
+            _refresh()
+
         edit_dlg = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Edit Session Title", weight=ft.FontWeight.BOLD),
-            content=ft.Container(
-                width=400,
-                content=ft.Column(
-                    tight=True,
-                    spacing=14,
-                    controls=[
-                        ft.Text("Give your conversation a memorable name:", size=13),
-                        title_field,
-                    ],
-                ),
-            ),
+            modal=True, title=ft.Text("Edit Session Title", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=400,
+                                 content=ft.Column(tight=True, spacing=14,
+                                                   controls=[ft.Text("Give this conversation a name:", size=13),
+                                                             title_field])),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda _: _close_edit_dialog()),
-                ft.ElevatedButton(
-                    "Save",
-                    icon=ft.Icons.SAVE,
-                    on_click=lambda _: _save_title(),
-                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE),
-                ),
+                ft.TextButton("Cancel", on_click=lambda _: (setattr(edit_dlg, "open", False), page.update())),
+                ft.ElevatedButton("Save", icon=ft.Icons.SAVE, on_click=lambda _: _save(),
+                                  style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE)),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        
-        def _close_edit_dialog():
-            edit_dlg.open = False
-            page.update()
-        
-        def _save_title():
-            new_title = title_field.value.strip()
-            if not new_title:
-                page.snack_bar = ft.SnackBar(ft.Text("Title cannot be empty!"))
-                page.snack_bar.open = True
-                page.update()
-                return
-            
-            db.update_chat_session_title(session_id, new_title)
-            _close_edit_dialog()
-            _refresh()
-            
-            page.snack_bar = ft.SnackBar(ft.Text("Title updated successfully!"))
-            page.snack_bar.open = True
-            page.update()
-        
         page.overlay.append(edit_dlg)
         edit_dlg.open = True
         page.update()
 
-    # Show the dialog
     page.overlay.append(dlg)
     dlg.open = True
     page.update()
@@ -568,14 +557,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 # Main chat dialog
 # ---------------------------------------------------------------------------
 
-def _open_ai_chat(
-    page: ft.Page,
-    financial_context: str,
-    api_key: str,
-    session_id: int | None,
-    history: list,
-) -> None:
-    # Auto-size dialog
+def _open_ai_chat(page, financial_context, api_key, session_id, history):
     win_w = getattr(page, "window_width", None) or getattr(page, "width", None) or 900
     win_h = getattr(page, "window_height", None) or getattr(page, "height", None) or 700
     dlg_w = max(400, min(720, int(win_w * 0.82)))
@@ -585,128 +567,78 @@ def _open_ai_chat(
     current_session = [session_id]
     conv_history = list(history)
     is_typing = [False]
-    # True when a static welcome bubble was injected (new chats only).
-    # Needed to compute the DB offset when truncating after an inline edit.
     _has_welcome = [not bool(history)]
-    # (history_index, outer_row) — used by _edit_and_resend for truncation
     bubble_map: list[tuple[int, ft.Control]] = []
-    # Set to True when the user presses the stop button.
-    # The worker checks this after its blocking API call returns and discards
-    # the reply if True (it cannot interrupt the network call itself).
     _stop_requested = [False]
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
 
-    def _edit_and_resend(hist_idx: int, bubble_row: ft.Control, new_text: str) -> None:
-        """Truncate conversation from hist_idx onward, then resend with new_text."""
+    def _edit_and_resend(hist_idx, bubble_row, new_text):
         if is_typing[0]:
             return
-
-        # Remove this bubble and everything after it from the UI
         try:
             bubble_pos = messages_col.controls.index(bubble_row)
         except ValueError:
             return
         messages_col.controls = messages_col.controls[:bubble_pos]
-
-        # Slice in-memory history — drop the old user message and all replies after it
         conv_history[:] = conv_history[:hist_idx]
-
-        # Keep bubble_map in sync
         bubble_map[:] = [(i, c) for (i, c) in bubble_map if i < hist_idx]
-
-        # Trim persisted messages so the DB matches the truncated history.
-        # The welcome message (index 0) is never written to the DB, so we subtract 1
-        # for fresh chats.
         if current_session[0] is not None:
             db_keep = hist_idx - (1 if _has_welcome[0] else 0)
             db.truncate_chat_messages_after_index(current_session[0], db_keep)
-
         page.update()
         _send(new_text)
 
-    def _add_user_bubble(text: str, hist_idx: int) -> None:
-        """Append a user bubble with inline edit-and-resend support."""
+    def _add_user_bubble(text, hist_idx):
         current_text = [text]
-
-        msg_col = ft.Column(
-            spacing=2,
-            horizontal_alignment=ft.CrossAxisAlignment.END,
-        )
+        msg_col = ft.Column(spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END)
         outer_row = ft.Row(
             alignment=ft.MainAxisAlignment.END,
             vertical_alignment=ft.CrossAxisAlignment.END,
             controls=[ft.Container(expand=True), msg_col],
         )
-
         btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
         btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
 
-        def _render_view() -> None:
+        def _render_view():
             msg_col.controls = [
                 ft.Container(
                     width=bubble_w,
-                    content=ft.Text(
-                        current_text[0], selectable=True, size=13, color=ft.Colors.WHITE
-                    ),
-                    padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+                    content=ft.Text(current_text[0], selectable=True, size=13, color=ft.Colors.WHITE),
+                    padding=ft.Padding(left=14, right=14, top=10, bottom=10),
                     bgcolor="#0369a1",
-                    border_radius=ft.BorderRadius(
-                        top_left=14, top_right=4, bottom_left=14, bottom_right=14
-                    ),
+                    border_radius=ft.BorderRadius(top_left=16, top_right=4, bottom_left=16, bottom_right=16),
                     margin=ft.Margin(bottom=2, top=0, left=0, right=0),
                 ),
-                ft.Row(
-                    spacing=0,
-                    alignment=ft.MainAxisAlignment.END,
-                    controls=[
-                        ft.TextButton(
-                            content=ft.Row(
-                                spacing=3,
-                                controls=[
-                                    ft.Icon(ft.Icons.EDIT_OUTLINED, size=11, color=btn_color),
-                                    ft.Text("Edit", size=10, color=btn_color),
-                                ],
-                            ),
-                            on_click=lambda _: _render_edit(),
-                            style=btn_style,
-                            tooltip="Edit and resend",
-                        ),
-                        ft.TextButton(
-                            content=ft.Row(
-                                spacing=3,
-                                controls=[
-                                    ft.Icon(ft.Icons.COPY_OUTLINED, size=11, color=btn_color),
-                                    ft.Text("Copy", size=10, color=btn_color),
-                                ],
-                            ),
-                            on_click=lambda _: _do_copy(),
-                            style=btn_style,
-                            tooltip="Copy message",
-                        ),
-                    ],
-                ),
+                ft.Row(spacing=0, alignment=ft.MainAxisAlignment.END, controls=[
+                    ft.TextButton(
+                        content=ft.Row(spacing=3, controls=[
+                            ft.Icon(ft.Icons.EDIT_OUTLINED, size=11, color=btn_color),
+                            ft.Text("Edit", size=10, color=btn_color),
+                        ]),
+                        on_click=lambda _: _render_edit(), style=btn_style, tooltip="Edit and resend",
+                    ),
+                    ft.TextButton(
+                        content=ft.Row(spacing=3, controls=[
+                            ft.Icon(ft.Icons.COPY_OUTLINED, size=11, color=btn_color),
+                            ft.Text("Copy", size=10, color=btn_color),
+                        ]),
+                        on_click=lambda _: _do_copy(), style=btn_style, tooltip="Copy message",
+                    ),
+                ]),
             ]
             page.update()
 
-        def _render_edit() -> None:
+        def _render_edit():
             if is_typing[0]:
                 return
-
             ef = ft.TextField(
-                value=current_text[0],
-                multiline=True,
-                min_lines=1,
-                max_lines=6,
-                text_size=13,
-                autofocus=True,
-                border_radius=12,
-                border_color="#334155",
-                focused_border_color="#0ea5e9",
-                expand=True,
+                value=current_text[0], multiline=True, min_lines=1, max_lines=6,
+                text_size=13, autofocus=True, border_radius=12,
+                border_color="#334155", focused_border_color="#0ea5e9", expand=True,
             )
 
-            def _confirm(_=None) -> None:
+            def _confirm(_=None):
                 new_text = (ef.value or "").strip()
                 if not new_text:
                     return
@@ -715,51 +647,32 @@ def _open_ai_chat(
                 _edit_and_resend(hist_idx, outer_row, new_text)
 
             ef.on_submit = lambda e: _confirm()
-
             msg_col.controls = [
                 ft.Container(
-                    width=bubble_w,
-                    bgcolor="#0f172a",
-                    border_radius=12,
-                    padding=ft.padding.all(8),
-                    border=ft.border.all(1, "#334155"),
-                    content=ft.Column(
-                        spacing=6,
-                        controls=[
-                            ef,
-                            ft.Row(
-                                alignment=ft.MainAxisAlignment.END,
-                                spacing=6,
-                                controls=[
-                                    ft.TextButton(
-                                        "Cancel",
-                                        on_click=lambda _: _render_view(),
-                                        style=ft.ButtonStyle(
-                                            color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)
-                                        ),
-                                    ),
-                                    ft.FilledButton(
-                                        "Send edit",
-                                        icon=ft.Icons.SEND_ROUNDED,
-                                        on_click=_confirm,
-                                        style=ft.ButtonStyle(
-                                            bgcolor="#0369a1",
-                                            color=ft.Colors.WHITE,
-                                            shape=ft.RoundedRectangleBorder(radius=10),
-                                        ),
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
+                    width=bubble_w, bgcolor="#0f172a", border_radius=12,
+                    padding=ft.padding.all(8), border=ft.border.all(1, "#334155"),
+                    content=ft.Column(spacing=6, controls=[
+                        ef,
+                        ft.Row(alignment=ft.MainAxisAlignment.END, spacing=6, controls=[
+                            ft.TextButton("Cancel", on_click=lambda _: _render_view(),
+                                          style=ft.ButtonStyle(color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE))),
+                            ft.FilledButton("Send edit", icon=ft.Icons.SEND_ROUNDED, on_click=_confirm,
+                                            style=ft.ButtonStyle(bgcolor="#0369a1", color=ft.Colors.WHITE,
+                                                                 shape=ft.RoundedRectangleBorder(radius=10))),
+                        ]),
+                    ]),
                 )
             ]
             page.update()
             ef.focus()
 
-        def _do_copy() -> None:
-            page.set_clipboard(current_text[0])
-            page.snack_bar = ft.SnackBar(ft.Text("Message copied!"), duration=1500)
+        def _do_copy():
+            ok = _copy_to_clipboard(page, current_text[0])
+            if ok:
+                msg = "Message copied!"
+            else:
+                msg = "Clipboard unavailable — text is selectable above."
+            page.snack_bar = ft.SnackBar(ft.Text(msg), duration=1800)
             page.snack_bar.open = True
             page.update()
 
@@ -767,17 +680,15 @@ def _open_ai_chat(
         bubble_map.append((hist_idx, outer_row))
         messages_col.controls.append(outer_row)
 
-    def _add_ai_bubble(text: str) -> None:
+    def _add_ai_bubble(text):
         messages_col.controls.append(_ai_bubble(text, bubble_w))
 
-    # Pre-populate existing history (for resumed chats)
     for idx, msg in enumerate(conv_history):
         if msg["role"] == "assistant":
             _add_ai_bubble(msg["content"])
         else:
             _add_user_bubble(msg["content"], idx)
 
-    # For brand-new chats show a static welcome
     if not conv_history:
         welcome_msg = "Hi! How can I help you today with your budget?"
         _add_ai_bubble(welcome_msg)
@@ -785,62 +696,39 @@ def _open_ai_chat(
 
     input_field = ft.TextField(
         hint_text="Ask anything about your budget…",
-        border_radius=24,
-        border_color="#334155",
-        focused_border_color="#0ea5e9",
-        text_size=13,
-        expand=True,
-        multiline=False,
+        border_radius=24, border_color="#334155", focused_border_color="#0ea5e9",
+        text_size=13, expand=True, multiline=False,
         on_submit=lambda e: _send(e.control.value),
     )
-
-    send_btn = ft.IconButton(
-        icon=ft.Icons.SEND_ROUNDED, icon_color="#0ea5e9",
-        icon_size=22, tooltip="Send",
-        on_click=lambda _: _send(input_field.value),
-    )
-
-    stop_btn = ft.IconButton(
-        icon=ft.Icons.STOP_CIRCLE_OUTLINED,
-        icon_color="#f87171",
-        icon_size=22,
-        tooltip="Stop responding",
-        visible=False,
-        on_click=lambda _: _stop_thinking(),
-    )
-
+    send_btn = ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color="#0ea5e9",
+                             icon_size=22, tooltip="Send",
+                             on_click=lambda _: _send(input_field.value))
+    stop_btn = ft.IconButton(icon=ft.Icons.STOP_CIRCLE_OUTLINED, icon_color="#f87171",
+                             icon_size=22, tooltip="Stop", visible=False,
+                             on_click=lambda _: _stop_thinking())
     typing_ind = _typing_bubble()
 
-    def _update_stop_btn_visibility() -> None:
+    def _update_stop_btn():
         stop_btn.visible = is_typing[0]
         send_btn.visible = not is_typing[0]
 
-    def _set_input_enabled(enabled: bool) -> None:
+    def _set_input_enabled(enabled):
         input_field.disabled = not enabled
-        _update_stop_btn_visibility()
+        _update_stop_btn()
 
-    def _stop_thinking() -> None:
-        """User pressed stop — signal the worker to discard its reply."""
+    def _stop_thinking():
         if not is_typing[0]:
             return
         _stop_requested[0] = True
-        # Reset UI immediately so the user knows we heard them
         is_typing[0] = False
         _set_input_enabled(True)
         if typing_ind in messages_col.controls:
             messages_col.controls.remove(typing_ind)
         page.update()
 
-    # ------------------------------------------------------------------
-    # Session / callback helpers
-    # ------------------------------------------------------------------
-
-    def _register_callback(sid: int) -> None:
-        """Register this dialog as the delivery target for sid's reply."""
-        def _deliver(reply: str) -> None:
-            # Guard: if already in conv_history (fast-path DB read beat us), skip.
-            if (conv_history
-                    and conv_history[-1].get("role") == "assistant"
+    def _register_callback(sid):
+        def _deliver(reply):
+            if (conv_history and conv_history[-1].get("role") == "assistant"
                     and conv_history[-1].get("content") == reply):
                 return
             conv_history.append({"role": "assistant", "content": reply})
@@ -852,39 +740,33 @@ def _open_ai_chat(
                 _add_ai_bubble(reply)
                 page.update()
             else:
-                # Dialog was closed again before the reply arrived — park it.
                 with _bg_lock:
                     _bg_results[sid] = reply
-
         with _sessions_meta_lock:
             _active_callbacks[sid] = _deliver
 
-    def _unregister_callback(sid: int) -> None:
+    def _unregister_callback(sid):
         with _sessions_meta_lock:
             _active_callbacks.pop(sid, None)
 
-    def _ensure_session() -> int:
+    def _ensure_session():
         if current_session[0] is None:
             current_session[0] = db.create_chat_session("New Chat")
             _register_callback(current_session[0])
         return current_session[0]
 
-    def _send(text: str) -> None:
+    def _send(text):
         if is_typing[0]:
             return
         text = (text or "").strip()
         if not text:
             return
-
         hist_idx = len(conv_history)
         input_field.value = ""
         conv_history.append({"role": "user", "content": text})
         _add_user_bubble(text, hist_idx)
-
         sid = _ensure_session()
         db.save_chat_message(sid, "user", text)
-
-        # Show typing indicator and disable input
         is_typing[0] = True
         _stop_requested[0] = False
         _set_input_enabled(False)
@@ -896,31 +778,17 @@ def _open_ai_chat(
 
         def _worker():
             reply = chat_with_ai(list(conv_history), financial_context, api_key)
-
-            # ── Remove from in-flight set ──────────────────────────────────
             with _sessions_meta_lock:
                 _pending_sessions.discard(sid)
                 callback = _active_callbacks.get(sid)
-
-            # ── Check stop ─────────────────────────────────────────────────
             if _stop_requested[0]:
                 _stop_requested[0] = False
-                # UI was already reset by _stop_thinking; nothing more to do.
                 return
-
-            # ── Persist ────────────────────────────────────────────────────
             db.save_chat_message(sid, "assistant", reply)
-
-            # Auto-title on first real user message
-            user_messages = [m for m in conv_history if m["role"] == "user"]
-            if len(user_messages) == 1:
-                title = _generate_session_title(user_messages[0]["content"], reply)
+            user_msgs = [m for m in conv_history if m["role"] == "user"]
+            if len(user_msgs) == 1:
+                title = _generate_session_title(user_msgs[0]["content"], reply)
                 db.update_chat_session_title(sid, title)
-
-            # ── Deliver ─────────────────────────────────────────────────────
-            # If a dialog is open for this session (could be a *new* dialog the
-            # user opened after closing the original one), deliver via callback.
-            # Otherwise park in _bg_results for the next open.
             if callback:
                 callback(reply)
             else:
@@ -939,7 +807,9 @@ def _open_ai_chat(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             controls=[
                 ft.Row(spacing=8, expand=True, controls=[
-                    ft.Text("🤖", size=22),
+                    ft.Container(width=28, height=28, border_radius=14,
+                                 bgcolor="#1e3a5f", alignment=ft.Alignment(0, 0),
+                                 content=ft.Text("🤖", size=14)),
                     ft.Text("AI Finance Advisor", weight=ft.FontWeight.BOLD, size=15, expand=True),
                 ]),
                 ft.Row(spacing=0, controls=[
@@ -951,49 +821,35 @@ def _open_ai_chat(
             ],
         ),
         content=ft.Container(
-            width=dlg_w,
-            height=dlg_h,
-            content=ft.Column(
-                spacing=0,
-                expand=True,
-                controls=[
-                    ft.Container(expand=True, content=messages_col,
-                                 padding=ft.Padding(left=4, right=4, top=4, bottom=4)),
-                    ft.Divider(height=1, color="#1e293b"),
-                    ft.Container(
-                        padding=ft.Padding(left=8, right=8, top=8, bottom=8),
-                        content=ft.Row(
-                            spacing=6,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            controls=[input_field, stop_btn, send_btn],
-                        ),
-                    ),
-                ],
-            ),
+            width=dlg_w, height=dlg_h,
+            content=ft.Column(spacing=0, expand=True, controls=[
+                ft.Container(expand=True, content=messages_col,
+                             padding=ft.Padding(left=4, right=4, top=4, bottom=4)),
+                ft.Divider(height=1, color="#1e293b"),
+                ft.Container(
+                    padding=ft.Padding(left=8, right=8, top=8, bottom=8),
+                    content=ft.Row(spacing=6,
+                                   vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                   controls=[input_field, stop_btn, send_btn]),
+                ),
+            ]),
         ),
         actions=[],
     )
 
     def _close():
         dlg.open = False
-        # Unregister so the worker falls back to _bg_results if it finishes after close.
         if current_session[0] is not None:
             _unregister_callback(current_session[0])
         page.update()
-    # Handle sessions that have (or had) a running worker only after the
-    # callback helpers and dialog are ready.
+
     if session_id is not None:
         _register_callback(session_id)
-
         with _bg_lock:
             pending_reply = _bg_results.pop(session_id, None)
-
         if pending_reply is not None:
-            already_there = (
-                conv_history
-                and conv_history[-1].get("role") == "assistant"
-                and conv_history[-1].get("content") == pending_reply
-            )
+            already_there = (conv_history and conv_history[-1].get("role") == "assistant"
+                             and conv_history[-1].get("content") == pending_reply)
             if not already_there:
                 conv_history.append({"role": "assistant", "content": pending_reply})
                 _add_ai_bubble(pending_reply)
@@ -1006,18 +862,82 @@ def _open_ai_chat(
                 if typing_ind not in messages_col.controls:
                     messages_col.controls.append(typing_ind)
 
-
     page.overlay.append(dlg)
     dlg.open = True
     page.update()
 
 
 # ---------------------------------------------------------------------------
-# Dashboard screen
+# Dashboard screen — professional redesign
 # ---------------------------------------------------------------------------
 
+def _stat_card(label: str, value: str, subtitle: str = "",
+               value_color=ft.Colors.WHITE, icon: str = "",
+               accent_color: str = "#334155") -> ft.Control:
+    """A polished stat tile with icon accent strip."""
+    controls = [
+        ft.Row(spacing=8, controls=[
+            ft.Text(icon, size=18) if icon else ft.Container(),
+            ft.Text(label, size=12, color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+        ]),
+        ft.Text(value, size=21, weight=ft.FontWeight.BOLD, color=value_color),
+    ]
+    if subtitle:
+        controls.append(
+            ft.Text(subtitle, size=10, color=ft.Colors.with_opacity(0.42, ft.Colors.ON_SURFACE))
+        )
+    return ft.Card(
+        elevation=2,
+        content=ft.Container(
+            padding=ft.Padding(left=14, right=14, top=12, bottom=12),
+            content=ft.Column(spacing=4, controls=controls),
+            border=ft.border.Border(left=ft.BorderSide(3, accent_color)),
+        ),
+    )
+
+
+def _budget_progress_row(category: str, spent: float, limit: float,
+                         peso_fn) -> ft.Control:
+    """A single budget progress bar item."""
+    pct = min(spent / limit, 1.0) if limit > 0 else 0.0
+    pct_display = pct * 100
+
+    if pct_display >= 100:
+        bar_color = "#ef4444"
+        status_icon = "🔴"
+    elif pct_display >= 80:
+        bar_color = "#f97316"
+        status_icon = "🟠"
+    elif pct_display >= 50:
+        bar_color = "#facc15"
+        status_icon = "🟡"
+    else:
+        bar_color = "#22c55e"
+        status_icon = "🟢"
+
+    return ft.Column(spacing=4, controls=[
+        ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[
+                ft.Row(spacing=6, controls=[
+                    ft.Text(status_icon, size=12),
+                    ft.Text(category[:22], size=12, weight=ft.FontWeight.W_500),
+                ]),
+                ft.Text(f"{peso_fn(spent)} / {peso_fn(limit)}",
+                        size=11, color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE)),
+            ],
+        ),
+        ft.Stack(controls=[
+            ft.Container(height=6, border_radius=3,
+                         bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.WHITE)),
+            ft.Container(height=6, border_radius=3, bgcolor=bar_color,
+                         width_percent=pct_display),
+        ]),
+    ])
+
+
 def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
-    db.init_chat_tables()  # idempotent
+    db.init_chat_tables()
 
     currency_code = db.get_currency()
     peso = make_peso(currency_code)
@@ -1030,301 +950,432 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     biggest_category = max(expense_map, key=lambda k: expense_map[k]) if expense_map else "N/A"
     biggest_value = expense_map.get(biggest_category, 0.0)
 
-    pie_b64 = _build_pie_chart(expense_map)
-    line_b64 = _build_line_chart(db.get_expenses_last_days(30))
+    # Budget limits for progress bars
+    budget_limits = db.get_budget_limits()
 
-    # -----------------------------------------------------------------------
-    # Build enriched AI context
-    # -----------------------------------------------------------------------
+    # Upcoming recurring bills
+    upcoming = db.get_upcoming_recurring(days=7)
+
+    # Charts — generated once
+    donut_b64 = _build_donut_chart(expense_map)
+    line_b64 = _build_area_line_chart(db.get_expenses_last_days(30))
+    bar_b64 = _build_bar_chart(expense_map)
+
+    # ── Build AI financial context ──────────────────────────────────────────
     today = date.today()
     today_str = today.isoformat()
+    import calendar as _cal
+    from datetime import timedelta as _td
 
-    # --- Budgets with full date / duration info ---
-    budget_limits = db.get_budget_limits()
     budget_lines: list[str] = []
     for budget in budget_limits:
-        category = budget.category
-        limit = budget.monthly_limit
-        spent = expense_map.get(category, 0.0)
-        remaining_money = limit - spent
-        pct = (spent / limit * 100) if limit > 0 else 0
-
-        if pct >= 100:
-            status = "Exceeded"
-        elif pct >= 80:
-            status = "Warning"
-        elif pct >= 50:
-            status = "On Track"
-        else:
-            status = "Good"
-
-        # Duration / date details
-        # Priority: explicit end_date > month-end calculation > start + duration_days
-        import calendar as _cal
-        from datetime import timedelta as _td
-        duration_desc: str
-        days_left_desc: str
-
-        start_str = budget.start_date or today_str
-
-        if budget.end_date:
-            # --- Case 1: explicit end date always wins, regardless of duration_type ---
-            try:
-                end = date.fromisoformat(budget.end_date)
-                start = date.fromisoformat(start_str)
-                total_days = (end - start).days
-                days_left = (end - today).days
-                duration_desc = (
-                    f"{total_days}-day period "
-                    f"({start_str} → {budget.end_date})"
-                )
-                if days_left > 0:
-                    days_left_desc = (
-                        f"{days_left} day(s) left (ends {budget.end_date})"
-                    )
-                elif days_left == 0:
-                    days_left_desc = f"ends TODAY ({budget.end_date})"
-                else:
-                    days_left_desc = f"ended on {budget.end_date}"
-            except ValueError:
-                duration_desc = f"custom ({start_str} → {budget.end_date})"
-                days_left_desc = "unknown days left"
-
-        elif budget.duration_type == "month":
-            # --- Case 2: monthly budget — end is last day of the start month ---
-            try:
-                sd = date.fromisoformat(start_str)
-                last_day = _cal.monthrange(sd.year, sd.month)[1]
-                end = date(sd.year, sd.month, last_day)
-                days_left = (end - today).days
-                duration_desc = f"monthly (started {start_str}, resets end of {sd.strftime('%b %Y')})"
-                if days_left > 0:
-                    days_left_desc = (
-                        f"{days_left} day(s) left in budget period (ends {end.isoformat()})"
-                    )
-                elif days_left == 0:
-                    days_left_desc = f"ends TODAY ({end.isoformat()})"
-                else:
-                    days_left_desc = "budget period has ended"
-            except ValueError:
-                duration_desc = "monthly"
-                days_left_desc = "unknown days left"
-
-        else:
-            # --- Case 3: fixed custom duration — compute end from start + days ---
-            try:
-                start = date.fromisoformat(start_str)
-                end = start + _td(days=max(1, budget.duration_days))
-                days_left = (end - today).days
-                duration_desc = (
-                    f"{budget.duration_days}-day period "
-                    f"(started {start_str}, ends {end.isoformat()})"
-                )
-                if days_left > 0:
-                    days_left_desc = f"{days_left} day(s) left (ends {end.isoformat()})"
-                elif days_left == 0:
-                    days_left_desc = f"ends TODAY ({end.isoformat()})"
-                else:
-                    days_left_desc = f"ended on {end.isoformat()}"
-            except ValueError:
-                duration_desc = f"{budget.duration_days}-day custom"
-                days_left_desc = "unknown days left"
-
+        spent = expense_map.get(budget.category, 0.0)
+        pct = (spent / budget.monthly_limit * 100) if budget.monthly_limit > 0 else 0
+        status = ("Exceeded" if pct >= 100 else "Warning" if pct >= 80
+                  else "On Track" if pct >= 50 else "Good")
         budget_lines.append(
-            f"  • {category}: limit={peso(limit)}, spent={peso(spent)}, "
-            f"remaining={peso(remaining_money)}, {pct:.0f}% used, status={status}, "
-            f"duration={duration_desc}, {days_left_desc}"
+            f"  • {budget.category}: limit={peso(budget.monthly_limit)}, "
+            f"spent={peso(spent)}, {pct:.0f}% used, status={status}"
         )
 
-    budgets_section = (
-        "\n".join(budget_lines) if budget_lines else "  (no budgets set)"
-    )
-
-    # --- Recent transactions (last 20) ---
     recent_txns = db.get_transactions()[:20]
-    txn_lines: list[str] = []
-    for t in recent_txns:
-        sign = "+" if t.txn_type == "income" else "-"
-        desc = f" ({t.description})" if t.description else ""
-        txn_lines.append(
-            f"  • [{t.txn_date}] {sign}{peso(t.amount)} | {t.category}{desc}"
-        )
-    txns_section = "\n".join(txn_lines) if txn_lines else "  (no transactions yet)"
-
-    # --- Recurring transactions with next-occurrence details ---
+    txn_lines = [
+        f"  • [{t.txn_date}] {'+' if t.txn_type=='income' else '-'}{peso(t.amount)} | {t.category}"
+        for t in recent_txns
+    ]
     recurring = db.get_recurring_transactions()
-    rec_lines: list[str] = []
-    for r in recurring:
-        active_label = "active" if r.active else "paused"
-        try:
-            next_d = date.fromisoformat(r.next_date)
-            days_until = (next_d - today).days
-            if days_until < 0:
-                timing = f"overdue since {r.next_date} ({abs(days_until)} day(s) ago)"
-            elif days_until == 0:
-                timing = "due TODAY"
-            elif days_until == 1:
-                timing = "due TOMORROW"
-            else:
-                timing = f"next on {r.next_date} ({days_until} day(s) from now)"
-        except ValueError:
-            timing = f"next on {r.next_date}"
-
-        freq_label = r.frequency
-        if r.frequency == "custom":
-            freq_label = f"every {r.frequency_days} day(s)"
-
-        sign = "+" if r.txn_type == "income" else "-"
-        desc = f" ({r.description})" if r.description else ""
-        rec_lines.append(
-            f"  • {r.category}{desc}: {sign}{peso(r.amount)}, "
-            f"{freq_label}, {timing}, started {r.start_date}, [{active_label}]"
-        )
-    rec_section = "\n".join(rec_lines) if rec_lines else "  (no recurring transactions)"
-
-    # --- Settings summary ---
+    rec_lines = [
+        f"  • {r.category}: {'+' if r.txn_type=='income' else '-'}{peso(r.amount)}, "
+        f"{r.frequency}, next {r.next_date}, {'active' if r.active else 'paused'}"
+        for r in recurring
+    ]
     starting_balance = db.get_starting_balance()
-    api_key_set = bool(db.get_anthropic_api_key())
-    settings_section = (
-        f"  Currency: {currency_code}\n"
-        f"  Starting balance: {peso(starting_balance)}\n"
-        f"  Anthropic API key configured: {'Yes' if api_key_set else 'No'}"
-    )
+    api_key = db.get_anthropic_api_key()
 
-    # --- Assemble full context ---
     financial_context = (
-        f"Today's date: {today_str}\n"
-        f"Currency: {currency_code}\n"
-        f"Current month: {month}\n\n"
-        f"=== BALANCE & CASHFLOW ===\n"
-        f"Current balance: {peso(balance)}\n"
-        f"Starting balance: {peso(starting_balance)}\n"
-        f"Income this month: {peso(month_income)}\n"
-        f"Spent this month: {peso(month_total)}\n"
-        f"Net cashflow this month: {peso(net_cashflow)}\n"
-        f"Biggest spending category: {biggest_category} ({peso(biggest_value)})\n\n"
-        f"=== SPENDING BY CATEGORY (this month) ===\n"
-        + "\n".join(
-            f"  • {cat}: {peso(amt)}" for cat, amt in expense_map.items()
-        ) + "\n\n"
-        f"=== BUDGET LIMITS & TRACKING ===\n"
-        f"{budgets_section}\n\n"
-        f"=== RECENT TRANSACTIONS (last 20) ===\n"
-        f"{txns_section}\n\n"
-        f"=== RECURRING TRANSACTIONS ===\n"
-        f"{rec_section}\n\n"
-        f"=== APP SETTINGS ===\n"
-        f"{settings_section}"
+        f"Today: {today_str} | Currency: {currency_code}\n"
+        f"Balance: {peso(balance)} | Starting: {peso(starting_balance)}\n"
+        f"Income this month: {peso(month_income)} | Spent: {peso(month_total)} | Net: {peso(net_cashflow)}\n\n"
+        f"=== SPENDING BY CATEGORY ===\n"
+        + "\n".join(f"  • {cat}: {peso(amt)}" for cat, amt in expense_map.items())
+        + f"\n\n=== BUDGET LIMITS ===\n{chr(10).join(budget_lines) or '  (none)'}\n"
+        f"\n=== RECENT TRANSACTIONS ===\n{chr(10).join(txn_lines) or '  (none)'}\n"
+        f"\n=== RECURRING ===\n{chr(10).join(rec_lines) or '  (none)'}"
     )
 
     def open_ai_chat(_):
-        _open_ai_chat(page, financial_context, db.get_anthropic_api_key(), None, [])
+        _open_ai_chat(page, financial_context, api_key, None, [])
 
     def open_history(_):
-        _open_history_dialog(page, financial_context, db.get_anthropic_api_key())
+        _open_history_dialog(page, financial_context, api_key)
 
     def open_add_income(_):
         from ui.transactions_screen import _income_dialog
         _income_dialog(page, lambda **_: on_data_changed())
 
+    # ── BALANCE HERO CARD ───────────────────────────────────────────────────
+    savings_rate = (net_cashflow / month_income * 100) if month_income > 0 else 0.0
+    balance_card = ft.Card(
+        elevation=6,
+        content=ft.Container(
+            padding=ft.Padding(left=20, right=20, top=18, bottom=18),
+            border_radius=20,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1),
+                colors=["#0284c7", "#4f46e5", "#7c3aed"],
+            ),
+            content=ft.Column(spacing=0, controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                    controls=[
+                        ft.Column(spacing=6, controls=[
+                            ft.Text("Current Balance", color=ft.Colors.with_opacity(0.75, ft.Colors.WHITE),
+                                    size=13, weight=ft.FontWeight.W_500),
+                            ft.Text(peso(balance), color=ft.Colors.WHITE, size=36,
+                                    weight=ft.FontWeight.BOLD),
+                        ]),
+                        ft.FilledButton(
+                            "+ Income", icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+                            on_click=open_add_income,
+                            style=ft.ButtonStyle(
+                                bgcolor=ft.Colors.with_opacity(0.22, ft.Colors.WHITE),
+                                color=ft.Colors.WHITE,
+                                shape=ft.RoundedRectangleBorder(radius=12),
+                            ),
+                        ),
+                    ],
+                ),
+                ft.Container(height=14),
+                ft.Row(spacing=0, controls=[
+                    ft.Container(
+                        expand=True,
+                        content=ft.Column(spacing=2, controls=[
+                            ft.Text("↑ Income", size=11,
+                                    color=ft.Colors.with_opacity(0.65, ft.Colors.WHITE)),
+                            ft.Text(peso(month_income), size=14, weight=ft.FontWeight.BOLD,
+                                    color=ft.Colors.WHITE),
+                        ]),
+                    ),
+                    ft.VerticalDivider(width=1, color=ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
+                    ft.Container(
+                        expand=True,
+                        padding=ft.Padding(left=16, right=0, top=0, bottom=0),
+                        content=ft.Column(spacing=2, controls=[
+                            ft.Text("↓ Spent", size=11,
+                                    color=ft.Colors.with_opacity(0.65, ft.Colors.WHITE)),
+                            ft.Text(peso(month_total), size=14, weight=ft.FontWeight.BOLD,
+                                    color=ft.Colors.WHITE),
+                        ]),
+                    ),
+                    ft.VerticalDivider(width=1, color=ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
+                    ft.Container(
+                        expand=True,
+                        padding=ft.Padding(left=16, right=0, top=0, bottom=0),
+                        content=ft.Column(spacing=2, controls=[
+                            ft.Text("Savings Rate", size=11,
+                                    color=ft.Colors.with_opacity(0.65, ft.Colors.WHITE)),
+                            ft.Text(f"{savings_rate:.0f}%", size=14,
+                                    weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                        ]),
+                    ),
+                ]),
+            ]),
+        ),
+    )
+
+    # ── STAT TILES ──────────────────────────────────────────────────────────
+    stat_row = ft.ResponsiveRow(spacing=8, controls=[
+        ft.Container(col={"xs": 6, "md": 3}, content=_stat_card(
+            "Net Cashflow",
+            ("+" if net_cashflow >= 0 else "") + peso(net_cashflow),
+            "income minus expenses",
+            value_color=ft.Colors.GREEN_400 if net_cashflow >= 0 else ft.Colors.RED_400,
+            icon="💹", accent_color="#22c55e" if net_cashflow >= 0 else "#ef4444",
+        )),
+        ft.Container(col={"xs": 6, "md": 3}, content=_stat_card(
+            "This Month's Spend",
+            peso(month_total),
+            "total expenses",
+            value_color=ft.Colors.ORANGE_300,
+            icon="💸", accent_color="#f97316",
+        )),
+        ft.Container(col={"xs": 6, "md": 3}, content=_stat_card(
+            "Top Category",
+            biggest_category[:15],
+            peso(biggest_value),
+            value_color=ft.Colors.CYAN_300,
+            icon="📊", accent_color="#38bdf8",
+        )),
+        ft.Container(col={"xs": 6, "md": 3}, content=_stat_card(
+            "Budget Limits",
+            str(len(budget_limits)),
+            f"{sum(1 for b in budget_limits if expense_map.get(b.category, 0) >= b.monthly_limit)} exceeded",
+            value_color=ft.Colors.PURPLE_300,
+            icon="🎯", accent_color="#a78bfa",
+        )),
+    ])
+
+    # ── AI ADVISOR CARD ──────────────────────────────────────────────────────
+    ai_card = ft.Card(
+        elevation=3,
+        content=ft.Container(
+            padding=ft.Padding(left=16, right=12, top=14, bottom=14),
+            border_radius=14,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, 0), end=ft.Alignment(1, 0),
+                colors=[ft.Colors.with_opacity(0.12, "#38bdf8"),
+                        ft.Colors.with_opacity(0.04, "#818cf8")],
+            ),
+            border=ft.border.all(1, ft.Colors.with_opacity(0.15, "#38bdf8")),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Row(spacing=12, expand=True, controls=[
+                        ft.Container(
+                            width=42, height=42, border_radius=21,
+                            gradient=ft.LinearGradient(
+                                begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1),
+                                colors=["#0ea5e9", "#6366f1"],
+                            ),
+                            alignment=ft.Alignment(0, 0),
+                            content=ft.Text("🤖", size=20),
+                        ),
+                        ft.Column(spacing=2, expand=True, controls=[
+                            ft.Text("AI Finance Advisor", weight=ft.FontWeight.BOLD, size=14),
+                            ft.Text("Ask anything about your spending & savings",
+                                    size=11, color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
+                        ]),
+                    ]),
+                    ft.Row(spacing=6, controls=[
+                        ft.IconButton(icon=ft.Icons.HISTORY, icon_color="#94a3b8",
+                                      tooltip="Chat History", on_click=open_history),
+                        ft.FilledButton(
+                            "Chat", icon=ft.Icons.AUTO_AWESOME,
+                            on_click=open_ai_chat,
+                            style=ft.ButtonStyle(
+                                bgcolor="#0ea5e9", color=ft.Colors.WHITE,
+                                shape=ft.RoundedRectangleBorder(radius=10),
+                            ),
+                        ),
+                    ]),
+                ],
+            ),
+        ),
+    )
+
+    # ── BUDGET PROGRESS SECTION ──────────────────────────────────────────────
+    budget_controls: list[ft.Control] = []
+    for b in budget_limits[:5]:
+        spent = expense_map.get(b.category, 0.0)
+        limit = b.monthly_limit
+        pct = min(spent / limit, 1.0) if limit > 0 else 0.0
+        pct_pct = pct * 100
+
+        if pct_pct >= 100:
+            bar_color = "#ef4444"; status_icon = "🔴"
+        elif pct_pct >= 80:
+            bar_color = "#f97316"; status_icon = "🟠"
+        elif pct_pct >= 50:
+            bar_color = "#facc15"; status_icon = "🟡"
+        else:
+            bar_color = "#22c55e"; status_icon = "🟢"
+
+        budget_controls.append(
+            ft.Column(spacing=4, controls=[
+                ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Row(spacing=6, controls=[
+                        ft.Text(status_icon, size=12),
+                        ft.Text(b.category[:24], size=12, weight=ft.FontWeight.W_500),
+                    ]),
+                    ft.Text(f"{peso(spent)} / {peso(limit)}",
+                            size=11, color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
+                ]),
+                ft.Stack(controls=[
+                    ft.Container(height=7, border_radius=4,
+                                 bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                    ft.Container(height=7, border_radius=4, bgcolor=bar_color,
+                                 expand=False),
+                ]),
+                ft.Container(
+                    ft.Stack(controls=[
+                        ft.Container(height=7, border_radius=4,
+                                     bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                        ft.Container(height=7, border_radius=4, bgcolor=bar_color,
+                                     width=None),
+                    ]),
+                ),
+            ])
+        )
+
+    # Simpler, reliable budget progress bar using ProgressBar
+    budget_section_controls: list[ft.Control] = []
+    for b in budget_limits[:6]:
+        spent = expense_map.get(b.category, 0.0)
+        limit = b.monthly_limit
+        pct = min(spent / limit, 1.0) if limit > 0 else 0.0
+        pct_pct = pct * 100
+
+        if pct_pct >= 100:
+            bar_color = ft.Colors.RED_400; status_icon = "🔴"
+        elif pct_pct >= 80:
+            bar_color = ft.Colors.ORANGE_400; status_icon = "🟠"
+        elif pct_pct >= 50:
+            bar_color = ft.Colors.YELLOW_400; status_icon = "🟡"
+        else:
+            bar_color = ft.Colors.GREEN_400; status_icon = "🟢"
+
+        budget_section_controls.append(
+            ft.Column(spacing=5, controls=[
+                ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                    ft.Row(spacing=5, controls=[
+                        ft.Text(status_icon, size=11),
+                        ft.Text(b.category[:26], size=12, weight=ft.FontWeight.W_500),
+                    ]),
+                    ft.Text(f"{peso(spent)} / {peso(limit)}",
+                            size=11, color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
+                ]),
+                ft.ProgressBar(value=pct, color=bar_color,
+                               bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
+                               border_radius=4, height=7),
+            ])
+        )
+
+    budget_card = ft.Card(
+        elevation=2,
+        content=ft.Container(
+            padding=ft.Padding(left=16, right=16, top=14, bottom=14),
+            content=ft.Column(
+                spacing=12,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(spacing=8, controls=[
+                                ft.Text("🎯", size=16),
+                                ft.Text("Budget Progress", weight=ft.FontWeight.BOLD, size=14),
+                            ]),
+                            ft.Text(f"{len(budget_limits)} limits",
+                                    size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
+                        ],
+                    ),
+                    *(budget_section_controls if budget_section_controls else [
+                        ft.Text("No budget limits set yet. Add them in the Budgets tab.",
+                                size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
+                    ]),
+                ],
+            ),
+        ),
+    ) if budget_limits else None
+
+    # ── UPCOMING BILLS ──────────────────────────────────────────────────────
+    upcoming_controls: list[ft.Control] = []
+    for u in upcoming[:4]:
+        days_away = u["days_away"]
+        if days_away < 0:
+            chip_color = ft.Colors.RED_400; chip_text = "OVERDUE"
+        elif days_away == 0:
+            chip_color = ft.Colors.ORANGE_400; chip_text = "TODAY"
+        elif days_away == 1:
+            chip_color = ft.Colors.YELLOW_600; chip_text = "TOMORROW"
+        else:
+            chip_color = ft.Colors.BLUE_400; chip_text = f"in {days_away}d"
+
+        sign = "+" if u["txn_type"] == "income" else "-"
+        upcoming_controls.append(
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Column(spacing=1, expand=True, controls=[
+                        ft.Text(u["category"][:24], size=12, weight=ft.FontWeight.W_500),
+                        ft.Text(u["description"][:30] if u["description"] else u["frequency"],
+                                size=10, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
+                    ]),
+                    ft.Row(spacing=8, controls=[
+                        ft.Text(f"{sign}{peso(u['amount'])}", size=13,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.GREEN_400 if u["txn_type"] == "income" else ft.Colors.ORANGE_300),
+                        ft.Container(
+                            padding=ft.Padding(left=8, right=8, top=2, bottom=2),
+                            border_radius=10,
+                            bgcolor=ft.Colors.with_opacity(0.18, chip_color),
+                            content=ft.Text(chip_text, size=10, weight=ft.FontWeight.BOLD,
+                                            color=chip_color),
+                        ),
+                    ]),
+                ],
+            )
+        )
+
+    upcoming_card = ft.Card(
+        elevation=2,
+        content=ft.Container(
+            padding=ft.Padding(left=16, right=16, top=14, bottom=14),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    ft.Row(spacing=8, controls=[
+                        ft.Text("📅", size=16),
+                        ft.Text("Upcoming Bills (7 days)", weight=ft.FontWeight.BOLD, size=14),
+                    ]),
+                    *(upcoming_controls if upcoming_controls else [
+                        ft.Text("No bills due in the next 7 days. 🎉",
+                                size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
+                    ]),
+                ],
+            ),
+        ),
+    ) if True else None  # always show
+
+    # ── CHART CARDS ──────────────────────────────────────────────────────────
+    def _chart_card(b64: str | None, title: str, placeholder: str) -> ft.Control:
+        return ft.Card(
+            elevation=2,
+            content=ft.Container(
+                padding=ft.Padding(left=12, right=12, top=12, bottom=8),
+                content=ft.Column(
+                    spacing=8,
+                    controls=[
+                        ft.Image(src=f"data:image/png;base64,{b64}",
+                                 fit=ft.BoxFit.CONTAIN, expand=True)
+                        if b64 else
+                        ft.Container(
+                            height=120,
+                            alignment=ft.Alignment(0, 0),
+                            content=ft.Text(placeholder, size=13,
+                                            color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                                            text_align=ft.TextAlign.CENTER),
+                        )
+                    ],
+                ),
+            ),
+        )
+
+    # ── ASSEMBLE DASHBOARD ───────────────────────────────────────────────────
+    sections: list[ft.Control] = [
+        balance_card,
+        stat_row,
+        ai_card,
+    ]
+
+    if upcoming_card:
+        sections.append(upcoming_card)
+    if budget_card:
+        sections.append(budget_card)
+    if donut_b64:
+        sections.append(_chart_card(donut_b64, "Spending by Category", "No expense data yet."))
+    if bar_b64:
+        sections.append(_chart_card(bar_b64, "Top Categories", "No expense data yet."))
+    if line_b64:
+        sections.append(_chart_card(line_b64, "Daily Spending Trend", "No trend data yet."))
+    if not donut_b64 and not line_b64:
+        sections.append(_chart_card(None, "", "No expenses recorded yet.\nAdd some transactions to see your charts!"))
+
     return ft.Column(
         expand=True,
         scroll=ft.ScrollMode.AUTO,
-        controls=[
-            ft.Card(
-                content=ft.Container(
-                    padding=16, border_radius=20,
-                    gradient=ft.LinearGradient(
-                        begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1),
-                        colors=["#0ea5e9", "#6366f1"],
-                    ),
-                    content=ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                        controls=[
-                            ft.Column(spacing=4, controls=[
-                                ft.Text("Current Balance", color=ft.Colors.WHITE_70, size=14),
-                                ft.Text(peso(balance), color=ft.Colors.WHITE, size=34,
-                                        weight=ft.FontWeight.BOLD),
-                            ]),
-                            ft.FilledButton(
-                                "+ Income", icon=ft.Icons.ADD_CIRCLE,
-                                on_click=open_add_income,
-                                style=ft.ButtonStyle(
-                                    bgcolor=ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
-                                    color=ft.Colors.WHITE,
-                                    shape=ft.RoundedRectangleBorder(radius=12),
-                                ),
-                            ),
-                        ],
-                    ),
-                )
-            ),
-            ft.ResponsiveRow(controls=[
-                ft.Container(col={"xs": 12, "md": 6}, content=ft.Card(content=ft.Container(
-                    padding=14, content=ft.Column(controls=[
-                        ft.Text("Spent This Month", size=13),
-                        ft.Text(peso(month_total), size=22, weight=ft.FontWeight.W_700,
-                                color=ft.Colors.ORANGE_300),
-                    ])))),
-                ft.Container(col={"xs": 12, "md": 6}, content=ft.Card(content=ft.Container(
-                    padding=14, content=ft.Column(controls=[
-                        ft.Text("Biggest Category", size=13),
-                        ft.Text(f"{biggest_category} ({peso(biggest_value)})", size=20,
-                                weight=ft.FontWeight.W_700),
-                    ])))),
-                ft.Container(col={"xs": 12, "md": 6}, content=ft.Card(content=ft.Container(
-                    padding=14, content=ft.Column(controls=[
-                        ft.Text("Income This Month", size=13),
-                        ft.Text(peso(month_income), size=22, weight=ft.FontWeight.W_700,
-                                color=ft.Colors.GREEN_400),
-                    ])))),
-                ft.Container(col={"xs": 12, "md": 6}, content=ft.Card(content=ft.Container(
-                    padding=14, content=ft.Column(controls=[
-                        ft.Text("Net Cashflow", size=13),
-                        ft.Text(
-                            ("+" if net_cashflow >= 0 else "") + peso(net_cashflow),
-                            size=22, weight=ft.FontWeight.W_700,
-                            color=ft.Colors.GREEN_400 if net_cashflow >= 0 else ft.Colors.RED_400,
-                        ),
-                        ft.Text("income minus expenses", size=11,
-                                color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE)),
-                    ])))),
-            ]),
-            # AI card — new chat + history
-            ft.Card(content=ft.Container(
-                padding=16,
-                content=ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    controls=[
-                        ft.Column(spacing=4, expand=True, controls=[
-                            ft.Text("AI Finance Advisor", weight=ft.FontWeight.BOLD, size=14),
-                            ft.Text("Chat with AI or browse past conversations.", size=12,
-                                    color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
-                        ]),
-                        ft.Row(spacing=6, controls=[
-                            ft.IconButton(icon=ft.Icons.HISTORY, icon_color="#94a3b8",
-                                          tooltip="Chat History", on_click=open_history),
-                            ft.FilledButton(
-                                "Chat with AI", icon=ft.Icons.AUTO_AWESOME,
-                                on_click=open_ai_chat,
-                                style=ft.ButtonStyle(
-                                    bgcolor="#0ea5e9", color=ft.Colors.WHITE,
-                                    shape=ft.RoundedRectangleBorder(radius=12),
-                                ),
-                            ),
-                        ]),
-                    ],
-                ),
-            )),
-            ft.Card(content=ft.Container(padding=8, content=(
-                ft.Image(src=f"data:image/png;base64,{pie_b64}", fit=ft.BoxFit.CONTAIN)
-                if pie_b64 else ft.Text("No expenses yet for this month.")
-            ))),
-            ft.Card(content=ft.Container(padding=8, content=(
-                ft.Image(src=f"data:image/png;base64,{line_b64}", fit=ft.BoxFit.CONTAIN)
-                if line_b64 else ft.Text("No trend data yet.")
-            ))),
-        ],
+        spacing=8,
+        controls=sections,
     )
