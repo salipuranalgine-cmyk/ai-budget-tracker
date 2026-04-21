@@ -745,3 +745,124 @@ def mark_first_run_seen() -> None:
     )
     conn.commit()
     conn.close()
+
+# ---------------------------------------------------------------------------
+# AI Chat history
+# ---------------------------------------------------------------------------
+# Storage is very lightweight: ~200 bytes per message avg.
+# 50 sessions × 30 messages = ~300 KB total. Users can delete any session.
+
+def init_chat_tables() -> None:
+    """Create chat history tables if they don't exist (safe to call on every startup)."""
+    conn = _connect()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            title       TEXT    NOT NULL DEFAULT 'Chat',
+            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            role        TEXT    NOT NULL CHECK(role IN ('user','assistant')),
+            content     TEXT    NOT NULL,
+            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def create_chat_session(title: str = "New Chat") -> int:
+    """Create a new chat session and return its id."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO chat_sessions (title) VALUES (?)", (title,))
+    conn.commit()
+    sid = cur.lastrowid
+    conn.close()
+    return int(sid)
+
+
+def save_chat_message(session_id: int, role: str, content: str) -> None:
+    """Append a single message to a session."""
+    conn = _connect()
+    conn.execute(
+        "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)",
+        (session_id, role, content),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_chat_session_title(session_id: int, title: str) -> None:
+    conn = _connect()
+    conn.execute("UPDATE chat_sessions SET title = ? WHERE id = ?", (title[:60], session_id))
+    conn.commit()
+    conn.close()
+
+
+def get_chat_sessions() -> list[dict]:
+    """Return all sessions newest-first, with message count and preview."""
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT s.id, s.title, s.created_at,
+               COUNT(m.id) AS msg_count,
+               (SELECT content FROM chat_messages
+                WHERE session_id = s.id AND role = 'assistant'
+                ORDER BY id ASC LIMIT 1) AS preview
+        FROM chat_sessions s
+        LEFT JOIN chat_messages m ON m.session_id = s.id
+        GROUP BY s.id
+        ORDER BY s.id DESC
+        """
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "created_at": row["created_at"],
+            "msg_count": row["msg_count"],
+            "preview": (row["preview"] or "")[:100],
+        }
+        for row in rows
+    ]
+
+
+def get_chat_messages(session_id: int) -> list[dict]:
+    """Return all messages for a session in order."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id ASC",
+        (session_id,),
+    ).fetchall()
+    conn.close()
+    return [{"role": row["role"], "content": row["content"]} for row in rows]
+
+
+def delete_chat_session(session_id: int) -> None:
+    """Delete a session and all its messages (CASCADE handles messages)."""
+    conn = _connect()
+    # Manually delete messages first in case PRAGMA foreign_keys is off
+    conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+    conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_chat_storage_kb() -> float:
+    """Rough estimate of chat history size in KB."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM chat_messages"
+    ).fetchone()
+    conn.close()
+    return round(float(row["total"]) / 1024, 1)
