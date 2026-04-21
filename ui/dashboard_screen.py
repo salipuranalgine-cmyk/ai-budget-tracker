@@ -105,8 +105,14 @@ def _generate_session_title(user_message: str, ai_reply: str) -> str:
     user_lower = user_message.lower()
     ai_lower = ai_reply.lower()
     
-    # Common budget topics and their keywords
+    # Common conversation types and budget topics
     topics = {
+        # Greetings and General Conversations
+        "Casual Greeting": ["hello", "hi", "hey", "how are you", "good morning", "good afternoon", "good evening"],
+        "Introduction": ["my name is", "i'm", "i am", "introduction", "about me"],
+        "Small Talk": ["how's your day", "what's up", "what are you doing", "nice to meet you"],
+        
+        # Budget Topics
         "Budget Planning": ["budget", "plan", "planning", "create budget", "monthly budget"],
         "Savings Goals": ["save", "saving", "goal", "goals", "set aside", "emergency fund"],
         "Expense Analysis": ["spending", "expenses", "expense", "where did i spend", "track expenses"],
@@ -116,6 +122,11 @@ def _generate_session_title(user_message: str, ai_reply: str) -> str:
         "Monthly Review": ["month", "review", "summary", "report", "overview"],
         "Category Spending": ["category", "food", "transport", "utilities", "entertainment"],
         "Financial Advice": ["advice", "help", "should i", "recommend", "suggest"],
+        
+        # Help and Support
+        "Help Request": ["help", "can you", "how do i", "what is", "explain", "tell me"],
+        "Questions": ["question", "what", "when", "where", "why", "how", "which"],
+        "General Chat": ["chat", "talk", "conversation", "discuss"],
     }
     
     # Check for topic matches in user message
@@ -573,8 +584,12 @@ def _open_ai_chat(
             db.save_chat_message(sid, "assistant", reply)
 
             # Auto-update session title with smart naming on first real reply
-            if len(conv_history) == 2:  # first user + first AI reply
-                title = _generate_session_title(conv_history[0]["content"], reply)
+            # Check if this is the first real user message (not counting welcome message)
+            user_messages = [msg for msg in conv_history if msg["role"] == "user"]
+            if len(user_messages) == 1:  # first real user message
+                # Get the first user message (not the welcome)
+                first_user_msg = user_messages[0]["content"]
+                title = _generate_session_title(first_user_msg, reply)
                 db.update_chat_session_title(sid, title)
 
             _set_busy(False)
