@@ -777,37 +777,6 @@ def _open_ai_chat(
         else:
             _add_user_bubble(msg["content"], idx)
 
-    # ── Handle sessions that have (or had) a running worker ───────────────────
-    if session_id is not None:
-        # Register callback first so the worker can find us if it finishes
-        # *after* we've initialised (the key race condition we're fixing).
-        _register_callback(session_id)
-
-        # Check if a completed reply was parked while no dialog was open.
-        with _bg_lock:
-            pending_reply = _bg_results.pop(session_id, None)
-
-        if pending_reply is not None:
-            # Guard: only show if not already the last message in history
-            already_there = (
-                conv_history
-                and conv_history[-1].get("role") == "assistant"
-                and conv_history[-1].get("content") == pending_reply
-            )
-            if not already_there:
-                conv_history.append({"role": "assistant", "content": pending_reply})
-                _add_ai_bubble(pending_reply)
-        else:
-            # Check if a worker is still in flight for this session.
-            with _sessions_meta_lock:
-                worker_running = session_id in _pending_sessions
-            if worker_running:
-                # Show typing indicator — the worker will deliver via callback.
-                is_typing[0] = True
-                _set_input_enabled(False)
-                if typing_ind not in messages_col.controls:
-                    messages_col.controls.append(typing_ind)
-
     # For brand-new chats show a static welcome
     if not conv_history:
         welcome_msg = "Hi! How can I help you today with your budget?"
@@ -1011,6 +980,32 @@ def _open_ai_chat(
         if current_session[0] is not None:
             _unregister_callback(current_session[0])
         page.update()
+    # Handle sessions that have (or had) a running worker only after the
+    # callback helpers and dialog are ready.
+    if session_id is not None:
+        _register_callback(session_id)
+
+        with _bg_lock:
+            pending_reply = _bg_results.pop(session_id, None)
+
+        if pending_reply is not None:
+            already_there = (
+                conv_history
+                and conv_history[-1].get("role") == "assistant"
+                and conv_history[-1].get("content") == pending_reply
+            )
+            if not already_there:
+                conv_history.append({"role": "assistant", "content": pending_reply})
+                _add_ai_bubble(pending_reply)
+        else:
+            with _sessions_meta_lock:
+                worker_running = session_id in _pending_sessions
+            if worker_running:
+                is_typing[0] = True
+                _set_input_enabled(False)
+                if typing_ind not in messages_col.controls:
+                    messages_col.controls.append(typing_ind)
+
 
     page.overlay.append(dlg)
     dlg.open = True
