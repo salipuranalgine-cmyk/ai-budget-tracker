@@ -9,6 +9,12 @@ import flet as ft
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — must be set before pyplot import
 import matplotlib.pyplot as plt
+
+# Background AI responses keyed by session_id.
+# When the chat dialog is closed while AI is still working, the worker
+# deposits its reply here so it can be re-displayed if the session is reopened.
+_bg_results: dict[int, str] = {}
+_bg_lock = threading.Lock()
 import pandas as pd
 
 import database as db
@@ -86,18 +92,71 @@ def _ai_bubble(text: str, bubble_w: int) -> ft.Control:
     )
 
 
-def _user_bubble(text: str, bubble_w: int) -> ft.Control:
+def _user_bubble(text: str, bubble_w: int, on_edit=None, on_copy=None) -> ft.Control:
+    """User chat bubble with optional Edit (fills input) and Copy (clipboard) buttons."""
+    btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
+    btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
+
+    action_btns: list[ft.Control] = []
+    if on_edit:
+        action_btns.append(
+            ft.TextButton(
+                content=ft.Row(
+                    spacing=3,
+                    controls=[
+                        ft.Icon(ft.Icons.EDIT_OUTLINED, size=11, color=btn_color),
+                        ft.Text("Edit", size=10, color=btn_color),
+                    ],
+                ),
+                on_click=lambda _: on_edit(text),
+                style=btn_style,
+                tooltip="Copy to input to re-ask",
+            )
+        )
+    if on_copy:
+        action_btns.append(
+            ft.TextButton(
+                content=ft.Row(
+                    spacing=3,
+                    controls=[
+                        ft.Icon(ft.Icons.COPY_OUTLINED, size=11, color=btn_color),
+                        ft.Text("Copy", size=10, color=btn_color),
+                    ],
+                ),
+                on_click=lambda _: on_copy(text),
+                style=btn_style,
+                tooltip="Copy message text",
+            )
+        )
+
+    action_row = ft.Row(
+        spacing=0,
+        alignment=ft.MainAxisAlignment.END,
+        controls=action_btns,
+    ) if action_btns else ft.Container(height=0)
+
     return ft.Row(
         alignment=ft.MainAxisAlignment.END,
+        vertical_alignment=ft.CrossAxisAlignment.END,
         controls=[
-            ft.Container(expand=True),   # left spacer — keeps bubble from stretching
-            ft.Container(
-                width=bubble_w,
-                content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
-                padding=ft.Padding(left=12, right=12, top=8, bottom=8),
-                bgcolor="#0369a1",
-                border_radius=ft.BorderRadius(top_left=14, top_right=4, bottom_left=14, bottom_right=14),
-                margin=ft.Margin(bottom=10, top=0, left=0, right=0),
+            ft.Container(expand=True),
+            ft.Column(
+                spacing=2,
+                horizontal_alignment=ft.CrossAxisAlignment.END,
+                controls=[
+                    ft.Container(
+                        width=bubble_w,
+                        content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
+                        padding=ft.Padding(left=12, right=12, top=8, bottom=8),
+                        bgcolor="#0369a1",
+                        border_radius=ft.BorderRadius(
+                            top_left=14, top_right=4,
+                            bottom_left=14, bottom_right=14,
+                        ),
+                        margin=ft.Margin(bottom=2, top=0, left=0, right=0),
+                    ),
+                    action_row,
+                ],
             ),
         ],
     )
@@ -515,20 +574,54 @@ def _open_ai_chat(
     current_session = [session_id]
     conv_history = list(history)
     is_typing = [False]
+    # Track (history_index, bubble_Row) for edit truncation
+    bubble_map: list[tuple[int, ft.Control]] = []  # kept for potential future use
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
 
-    # Pre-populate existing history (for resumed chats)
-    for msg in conv_history:
-        if msg["role"] == "assistant":
-            messages_col.controls.append(_ai_bubble(msg["content"], bubble_w))
-        else:
-            messages_col.controls.append(_user_bubble(msg["content"], bubble_w))
+    def _add_user_bubble(text: str, hist_idx: int) -> None:
+        """Append a user bubble. Edit fills the input field; Copy writes to clipboard."""
+        def _on_edit(t: str) -> None:
+            if is_typing[0]:
+                return
+            input_field.value = t
+            input_field.focus()
+            page.update()
 
-    # === NEW: For brand new chats, show friendly static welcome ===
+        def _on_copy(t: str) -> None:
+            page.set_clipboard(t)
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Message copied!"), duration=1500
+            )
+            page.snack_bar.open = True
+            page.update()
+
+        ctrl = _user_bubble(text, bubble_w, on_edit=_on_edit, on_copy=_on_copy)
+        bubble_map.append((hist_idx, ctrl))
+        messages_col.controls.append(ctrl)
+
+    def _add_ai_bubble(text: str) -> None:
+        messages_col.controls.append(_ai_bubble(text, bubble_w))
+
+    # Pre-populate existing history (for resumed chats)
+    for idx, msg in enumerate(conv_history):
+        if msg["role"] == "assistant":
+            _add_ai_bubble(msg["content"])
+        else:
+            _add_user_bubble(msg["content"], idx)
+
+    # Check if this session has a completed background reply waiting
+    if session_id is not None:
+        with _bg_lock:
+            pending_reply = _bg_results.pop(session_id, None)
+        if pending_reply is not None:
+            conv_history.append({"role": "assistant", "content": pending_reply})
+            _add_ai_bubble(pending_reply)
+
+    # For brand-new chats show a static welcome
     if not conv_history:
         welcome_msg = "Hi! How can I help you today with your budget?"
-        messages_col.controls.append(_ai_bubble(welcome_msg, bubble_w))
+        _add_ai_bubble(welcome_msg)
         conv_history.append({"role": "assistant", "content": welcome_msg})
 
     input_field = ft.TextField(
@@ -550,17 +643,9 @@ def _open_ai_chat(
 
     typing_ind = _typing_bubble()
 
-    def _set_busy(busy: bool) -> None:
-        is_typing[0] = busy
-        send_btn.disabled = busy
-        input_field.disabled = busy
-        if busy:
-            if typing_ind not in messages_col.controls:
-                messages_col.controls.append(typing_ind)
-        else:
-            if typing_ind in messages_col.controls:
-                messages_col.controls.remove(typing_ind)
-        page.update()
+    def _set_input_enabled(enabled: bool) -> None:
+        send_btn.disabled = not enabled
+        input_field.disabled = not enabled
 
     def _ensure_session() -> int:
         if current_session[0] is None:
@@ -574,30 +659,46 @@ def _open_ai_chat(
         if not text:
             return
 
+        hist_idx = len(conv_history)
         input_field.value = ""
-        messages_col.controls.append(_user_bubble(text, bubble_w))
         conv_history.append({"role": "user", "content": text})
+        _add_user_bubble(text, hist_idx)
+
         sid = _ensure_session()
         db.save_chat_message(sid, "user", text)
-        _set_busy(True)
+
+        # Show typing indicator and disable input — single update
+        is_typing[0] = True
+        _set_input_enabled(False)
+        if typing_ind not in messages_col.controls:
+            messages_col.controls.append(typing_ind)
+        page.update()
 
         def _worker():
             reply = chat_with_ai(list(conv_history), financial_context, api_key)
             conv_history.append({"role": "assistant", "content": reply})
             db.save_chat_message(sid, "assistant", reply)
 
-            # Auto-update session title with smart naming on first real reply
-            # Check if this is the first real user message (not counting welcome message)
-            user_messages = [msg for msg in conv_history if msg["role"] == "user"]
-            if len(user_messages) == 1:  # first real user message
-                # Get the first user message (not the welcome)
-                first_user_msg = user_messages[0]["content"]
-                title = _generate_session_title(first_user_msg, reply)
+            # Auto-title on first real user message
+            user_messages = [m for m in conv_history if m["role"] == "user"]
+            if len(user_messages) == 1:
+                title = _generate_session_title(user_messages[0]["content"], reply)
                 db.update_chat_session_title(sid, title)
 
-            _set_busy(False)
-            messages_col.controls.append(_ai_bubble(reply, bubble_w))
-            page.update()
+            # --- Atomic UI update ---
+            is_typing[0] = False
+            _set_input_enabled(True)
+            if typing_ind in messages_col.controls:
+                messages_col.controls.remove(typing_ind)
+
+            if dlg.open:
+                # Dialog still open — show reply directly
+                _add_ai_bubble(reply)
+                page.update()
+            else:
+                # Dialog was closed — park reply so it appears when session is reopened
+                with _bg_lock:
+                    _bg_results[sid] = reply
 
         threading.Thread(target=_worker, daemon=True).start()
 
