@@ -670,6 +670,37 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     pie_b64 = _build_pie_chart(expense_map)
     line_b64 = _build_line_chart(db.get_expenses_last_days(30))
 
+    # Get budget limits for AI context
+    budget_limits = db.get_budget_limits()
+    budget_info = {}
+    budget_status = {}
+    
+    for budget in budget_limits:
+        category = budget.category
+        limit = budget.monthly_limit
+        spent = expense_map.get(category, 0.0)
+        remaining = limit - spent
+        percentage_used = (spent / limit * 100) if limit > 0 else 0
+        
+        budget_info[category] = {
+            "limit": limit,
+            "spent": spent,
+            "remaining": remaining,
+            "percentage_used": percentage_used
+        }
+        
+        # Determine budget status
+        if percentage_used >= 100:
+            status = "Exceeded"
+        elif percentage_used >= 80:
+            status = "Warning"
+        elif percentage_used >= 50:
+            status = "On Track"
+        else:
+            status = "Good"
+        
+        budget_status[category] = status
+
     financial_context = (
         f"Currency: {currency_code}\n"
         f"Month: {month}\n"
@@ -678,7 +709,9 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         f"Income this month: {peso(month_income)}\n"
         f"Net cashflow: {peso(net_cashflow)}\n"
         f"Biggest spending category: {biggest_category} ({peso(biggest_value)})\n"
-        f"Full category breakdown: {expense_map}"
+        f"Full category breakdown: {expense_map}\n"
+        f"Budget limits and status: {budget_info}\n"
+        f"Budget alerts: {budget_status}"
     )
 
     def open_ai_chat(_):
