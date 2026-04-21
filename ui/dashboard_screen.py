@@ -133,32 +133,62 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
     sessions_col = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
     storage_text = ft.Text("", size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
 
+    # Multi-select state
+    selected_ids: list[int] = []
+    session_cards: dict[int, ft.Card] = {}
+
     dlg = ft.AlertDialog(
         modal=True,
         title=ft.Row(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             controls=[
-                ft.Row(spacing=8, controls=[ft.Text("💬", size=20),
-                                            ft.Text("Chat History", weight=ft.FontWeight.BOLD, size=16)]),
+                ft.Row(spacing=8, controls=[
+                    ft.Text("💬", size=20),
+                    ft.Text("Chat History", weight=ft.FontWeight.BOLD, size=16),
+                ]),
                 ft.IconButton(icon=ft.Icons.CLOSE, icon_size=20, on_click=lambda _: _close()),
             ],
         ),
         content=ft.Container(
-            width=500, height=420,
+            width=520,
+            height=480,
             content=ft.Column(
-                expand=True, spacing=8,
+                expand=True,
+                spacing=8,
                 controls=[
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        controls=[storage_text, ft.TextButton("+ New Chat", on_click=lambda _: _new_chat())],
-                    ),
+                    ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                        storage_text,
+                        ft.Row(spacing=4, controls=[
+                            ft.TextButton("+ New Chat", icon=ft.Icons.ADD, on_click=lambda _: _new_chat()),
+                            ft.TextButton(
+                                "🗑️ Clear All",
+                                icon=ft.Icons.DELETE_FOREVER,
+                                style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                                on_click=lambda _: _confirm_clear_all(),
+                            ),
+                        ]),
+                    ]),
                     ft.Divider(height=1),
                     ft.Container(expand=True, content=sessions_col),
+                    # Bulk actions row
+                    ft.Row(
+                        visible=False,
+                        controls=[
+                            ft.TextButton("Select All", on_click=lambda _: _select_all()),
+                            ft.TextButton("Deselect All", on_click=lambda _: _deselect_all()),
+                            ft.ElevatedButton(          # still using ElevatedButton for now (warning is harmless)
+                                "Delete Selected",
+                                icon=ft.Icons.DELETE,
+                                style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
+                                on_click=lambda _: _confirm_delete_selected(),
+                            ),
+                        ],
+                        key="bulk_actions_row",
+                    ),
                 ],
             ),
         ),
         actions=[],
-        actions_padding=ft.Padding(left=0, right=0, top=0, bottom=0),
     )
 
     def _close():
@@ -167,92 +197,168 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 
     def _new_chat():
         _close()
-        _open_ai_chat(page, financial_context, api_key, session_id=None, history=[])
+        _open_ai_chat(page, financial_context, api_key, None, [])
 
     def _resume(session_id: int):
         history = db.get_chat_messages(session_id)
         _close()
-        _open_ai_chat(page, financial_context, api_key, session_id=session_id, history=history)
+        _open_ai_chat(page, financial_context, api_key, session_id, history)
 
-    def _delete(session_id: int):
-        db.delete_chat_session(session_id)
-        _refresh()
+    def _refresh():
+        sessions = db.get_chat_sessions()
+        kb = db.get_chat_storage_kb()
+        storage_text.value = f"💾 Storage used: {kb} KB"
 
-    def _confirm_delete(session_id: int, title: str):
-        def _dismiss():
-            confirm.open = False
+        sessions_col.controls.clear()
+        selected_ids.clear()
+        session_cards.clear()
+
+        if not sessions:
+            sessions_col.controls.append(
+                ft.Container(
+                    padding=40,
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Text("No conversations yet.\nStart a new chat!", 
+                                    text_align=ft.TextAlign.CENTER,
+                                    color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
+                )
+            )
+            _update_bulk_visibility()
             page.update()
+            return
+
+        for s in sessions:
+            sid = s["id"]
+            preview = (s["preview"] or "No messages yet")[:85]
+
+            checkbox = ft.Checkbox(value=False, on_change=lambda e, sid=sid: _toggle_select(sid, e.control.value))
+
+            card = ft.Card(
+                content=ft.Container(
+                    padding=12,
+                    content=ft.Row(
+                        controls=[
+                            checkbox,
+                            ft.Column(
+                                expand=True,
+                                spacing=2,
+                                controls=[
+                                    ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13),
+                                    ft.Text(preview, size=11, color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
+                                    ft.Text(f"{s['created_at'][:16]} · {s['msg_count']} messages",
+                                            size=10, color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)),
+                                ],
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                icon_color=ft.Colors.RED_300,
+                                tooltip="Delete this chat",
+                                on_click=lambda _, sid=sid, title=s["title"]: _confirm_delete(sid, title),
+                            ),
+                        ],
+                    ),
+                    on_click=lambda _, sid=sid: _resume(sid),
+                )
+            )
+            session_cards[sid] = card
+            sessions_col.controls.append(card)
+
+        _update_bulk_visibility()
+        page.update()
+
+    def _toggle_select(sid: int, checked: bool):
+        if checked and sid not in selected_ids:
+            selected_ids.append(sid)
+        elif not checked and sid in selected_ids:
+            selected_ids.remove(sid)
+        _update_bulk_visibility()
+
+    def _select_all():
+        selected_ids[:] = list(session_cards.keys())
+        _refresh_checkboxes()
+
+    def _deselect_all():
+        selected_ids.clear()
+        _refresh_checkboxes()
+
+    def _refresh_checkboxes():
+        for sid, card in session_cards.items():
+            for child in card.content.content.controls:
+                if isinstance(child, ft.Checkbox):
+                    child.value = sid in selected_ids
+        _update_bulk_visibility()
+        page.update()
+
+    def _update_bulk_visibility():
+        bulk_row = next((c for c in dlg.content.content.controls if getattr(c, "key", None) == "bulk_actions_row"), None)
+        if bulk_row:
+            bulk_row.visible = len(selected_ids) > 0
+
+    def _confirm_delete(sid: int, title: str):
+        def _do_delete():
+            db.delete_chat_session(sid)
+            _refresh()
 
         confirm = ft.AlertDialog(
             modal=True,
             title=ft.Text("Delete conversation?"),
-            content=ft.Text(f'"{title}" will be permanently deleted.', size=13),
+            content=ft.Text(f'"{title}" and all its messages will be permanently deleted.'),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda _: _dismiss()),
-                ft.TextButton("Delete",
-                              style=ft.ButtonStyle(color=ft.Colors.RED_400),
-                              on_click=lambda _: (_dismiss(), _delete(session_id))),
+                ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
+                ft.TextButton("Delete", style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_delete())),
             ],
         )
         page.overlay.append(confirm)
         confirm.open = True
         page.update()
 
-    def _refresh():
-        sessions = db.get_chat_sessions()
-        kb = db.get_chat_storage_kb()
-        storage_text.value = f"Storage used: {kb} KB"
-        sessions_col.controls.clear()
-
-        if not sessions:
-            sessions_col.controls.append(
-                ft.Container(
-                    padding=ft.Padding(left=0, right=0, top=30, bottom=0),
-                    content=ft.Text(
-                        "No conversations yet. Start a new chat!",
-                        color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
-                        text_align=ft.TextAlign.CENTER,
-                    ),
-                )
-            )
-        else:
-            for s in sessions:
-                sid = s["id"]
-                preview = (s["preview"] or "No messages yet")[:90]
-                sessions_col.controls.append(
-                    ft.Card(
-                        content=ft.Container(
-                            padding=ft.Padding(left=12, right=8, top=10, bottom=10),
-                            on_click=lambda _, sid=sid: _resume(sid),
-                            content=ft.Row(
-                                vertical_alignment=ft.CrossAxisAlignment.START,
-                                controls=[
-                                    ft.Column(
-                                        expand=True, spacing=3,
-                                        controls=[
-                                            ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13),
-                                            ft.Text(preview, size=11,
-                                                    color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
-                                            ft.Text(
-                                                f"  {s['created_at'][:16]}  ·  {s['msg_count']} messages",
-                                                size=10,
-                                                color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE),
-                                            ),
-                                        ],
-                                    ),
-                                    ft.IconButton(
-                                        icon=ft.Icons.DELETE_OUTLINE,
-                                        icon_size=18, icon_color=ft.Colors.RED_300,
-                                        tooltip="Delete",
-                                        on_click=lambda _, sid=sid, t=s["title"]: _confirm_delete(sid, t),
-                                    ),
-                                ],
-                            ),
-                        )
-                    )
-                )
+    def _confirm_delete_selected():
+        if not selected_ids:
+            return
+        count = len(selected_ids)
+        confirm = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Delete selected chats?"),
+            content=ft.Text(f"{count} conversation(s) and all messages will be permanently deleted."),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
+                ft.TextButton("Delete All Selected",
+                              style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_bulk_delete())),
+            ],
+        )
+        page.overlay.append(confirm)
+        confirm.open = True
         page.update()
 
+    def _do_bulk_delete():
+        for sid in list(selected_ids):
+            db.delete_chat_session(sid)
+        selected_ids.clear()
+        _refresh()
+
+    def _confirm_clear_all():
+        confirm = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("🗑️ Wipe ALL chat history?"),
+            content=ft.Text("This will permanently delete EVERY conversation and all messages.\n\nThis cannot be undone."),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
+                ft.TextButton("Yes, Clear Everything",
+                              style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
+                              on_click=lambda _: (setattr(confirm, "open", False), page.update(), _do_clear_all())),
+            ],
+        )
+        page.overlay.append(confirm)
+        confirm.open = True
+        page.update()
+
+    def _do_clear_all():
+        db.delete_all_chat_sessions()
+        _refresh()
+
+    # Show the dialog
     page.overlay.append(dlg)
     dlg.open = True
     page.update()
@@ -267,16 +373,14 @@ def _open_ai_chat(
     page: ft.Page,
     financial_context: str,
     api_key: str,
-    session_id,
+    session_id: int | None,
     history: list,
 ) -> None:
-    # Auto-size to window — works for desktop and resizable windows
+    # Auto-size dialog
     win_w = getattr(page, "window_width", None) or getattr(page, "width", None) or 900
     win_h = getattr(page, "window_height", None) or getattr(page, "height", None) or 700
     dlg_w = max(400, min(720, int(win_w * 0.82)))
     dlg_h = max(440, min(700, int(win_h * 0.80)))
-
-    # Fixed pixel width for bubbles — prevents horizontal overflow
     bubble_w = dlg_w - 90
 
     current_session = [session_id]
@@ -285,12 +389,18 @@ def _open_ai_chat(
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
 
-    # Pre-populate when resuming
+    # Pre-populate existing history (for resumed chats)
     for msg in conv_history:
         if msg["role"] == "assistant":
             messages_col.controls.append(_ai_bubble(msg["content"], bubble_w))
-        elif not msg["content"].startswith("Please greet the user"):
+        else:
             messages_col.controls.append(_user_bubble(msg["content"], bubble_w))
+
+    # === NEW: For brand new chats, show friendly static welcome ===
+    if not conv_history:
+        welcome_msg = "Hi! How can I help you today with your budget?"
+        messages_col.controls.append(_ai_bubble(welcome_msg, bubble_w))
+        conv_history.append({"role": "assistant", "content": welcome_msg})
 
     input_field = ft.TextField(
         hint_text="Ask anything about your budget…",
@@ -334,6 +444,7 @@ def _open_ai_chat(
         text = (text or "").strip()
         if not text:
             return
+
         input_field.value = ""
         messages_col.controls.append(_user_bubble(text, bubble_w))
         conv_history.append({"role": "user", "content": text})
@@ -345,6 +456,12 @@ def _open_ai_chat(
             reply = chat_with_ai(list(conv_history), financial_context, api_key)
             conv_history.append({"role": "assistant", "content": reply})
             db.save_chat_message(sid, "assistant", reply)
+
+            # Optional: auto-update session title on first real reply
+            if len(conv_history) == 2:  # first user + first AI reply
+                short = reply.replace("\n", " ")[:55].rstrip()
+                db.update_chat_session_title(sid, short)
+
             _set_busy(False)
             messages_col.controls.append(_ai_bubble(reply, bubble_w))
             page.update()
@@ -359,7 +476,6 @@ def _open_ai_chat(
         modal=True,
         title=ft.Row(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Row(spacing=8, expand=True, controls=[
                     ft.Text("🤖", size=22),
@@ -374,25 +490,24 @@ def _open_ai_chat(
             ],
         ),
         content=ft.Container(
-            width=dlg_w, height=dlg_h,
+            width=dlg_w,
+            height=dlg_h,
             content=ft.Column(
-                spacing=0, expand=True,
+                spacing=0,
+                expand=True,
                 controls=[
                     ft.Container(expand=True, content=messages_col,
                                  padding=ft.Padding(left=4, right=4, top=4, bottom=4)),
                     ft.Divider(height=1, color="#1e293b"),
                     ft.Container(
                         padding=ft.Padding(left=8, right=8, top=8, bottom=8),
-                        content=ft.Row(
-                            spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            controls=[input_field, send_btn],
-                        ),
+                        content=ft.Row(spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                       controls=[input_field, send_btn]),
                     ),
                 ],
             ),
         ),
         actions=[],
-        actions_padding=ft.Padding(left=0, right=0, top=0, bottom=0),
     )
 
     def _close():
@@ -402,28 +517,6 @@ def _open_ai_chat(
     page.overlay.append(dlg)
     dlg.open = True
     page.update()
-
-    if not conv_history:
-        def _initial_greeting():
-            opening = (
-                "Please greet the user warmly and give a concise analysis of their "
-                "current financial data in 3 to 4 bullet points. Flag any concerns, "
-                "highlight positives, and invite them to ask follow-up questions."
-            )
-            conv_history.append({"role": "user", "content": opening})
-            _set_busy(True)
-            reply = chat_with_ai(list(conv_history), financial_context, api_key)
-            conv_history.append({"role": "assistant", "content": reply})
-            sid = _ensure_session()
-            db.save_chat_message(sid, "user", opening)
-            db.save_chat_message(sid, "assistant", reply)
-            short = reply.replace("\n", " ")[:55].rstrip()
-            db.update_chat_session_title(sid, short)
-            _set_busy(False)
-            messages_col.controls.append(_ai_bubble(reply, bubble_w))
-            page.update()
-
-        threading.Thread(target=_initial_greeting, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------

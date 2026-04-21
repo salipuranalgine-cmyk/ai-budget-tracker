@@ -866,3 +866,11 @@ def get_chat_storage_kb() -> float:
     ).fetchone()
     conn.close()
     return round(float(row["total"]) / 1024, 1)
+
+def delete_all_chat_sessions() -> None:
+    """Wipe every chat session and message."""
+    conn = _connect()
+    conn.execute("DELETE FROM chat_messages")
+    conn.execute("DELETE FROM chat_sessions")
+    conn.commit()
+    conn.close()
