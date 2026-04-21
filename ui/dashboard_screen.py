@@ -100,6 +100,51 @@ def _user_bubble(text: str, bubble_w: int) -> ft.Control:
     )
 
 
+def _generate_session_title(user_message: str, ai_reply: str) -> str:
+    """Generate a smart session title based on conversation content."""
+    user_lower = user_message.lower()
+    ai_lower = ai_reply.lower()
+    
+    # Common budget topics and their keywords
+    topics = {
+        "Budget Planning": ["budget", "plan", "planning", "create budget", "monthly budget"],
+        "Savings Goals": ["save", "saving", "goal", "goals", "set aside", "emergency fund"],
+        "Expense Analysis": ["spending", "expenses", "expense", "where did i spend", "track expenses"],
+        "Income Questions": ["income", "salary", "earn", "revenue", "make money"],
+        "Investment": ["invest", "investment", "stocks", "crypto", "portfolio"],
+        "Debt Management": ["debt", "loan", "credit card", "pay off", "borrow"],
+        "Monthly Review": ["month", "review", "summary", "report", "overview"],
+        "Category Spending": ["category", "food", "transport", "utilities", "entertainment"],
+        "Financial Advice": ["advice", "help", "should i", "recommend", "suggest"],
+    }
+    
+    # Check for topic matches in user message
+    for topic, keywords in topics.items():
+        if any(keyword in user_lower for keyword in keywords):
+            # Extract key info for more specific title
+            if topic == "Category Spending":
+                for category in ["food", "transport", "utilities", "entertainment", "shopping", "bills"]:
+                    if category in user_lower:
+                        return f"{category.title()} Spending"
+            elif topic == "Monthly Review":
+                # Try to extract month info
+                months = ["january", "february", "march", "april", "may", "june",
+                         "july", "august", "september", "october", "november", "december"]
+                for month in months:
+                    if month in user_lower:
+                        return f"{month.title()} Review"
+            return topic
+    
+    # Fallback: use first meaningful words from user message
+    words = user_message.split()
+    if len(words) >= 3:
+        title = " ".join(words[:3])
+    else:
+        title = user_message
+    
+    return title[:55].rstrip() + ("..." if len(title) > 55 else "")
+
+
 def _typing_bubble() -> ft.Control:
     return ft.Row(
         alignment=ft.MainAxisAlignment.START,
@@ -243,7 +288,19 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
                                 expand=True,
                                 spacing=2,
                                 controls=[
-                                    ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13),
+                                    ft.Row(
+                                        spacing=4,
+                                        controls=[
+                                            ft.Text(s["title"], weight=ft.FontWeight.W_600, size=13, expand=True),
+                                            ft.IconButton(
+                                                icon=ft.Icons.EDIT,
+                                                icon_size=16,
+                                                icon_color=ft.Colors.BLUE_300,
+                                                tooltip="Edit title",
+                                                on_click=lambda _, sid=sid, current_title=s["title"]: _edit_title(sid, current_title),
+                                            ),
+                                        ],
+                                    ),
                                     ft.Text(preview, size=11, color=ft.Colors.with_opacity(0.55, ft.Colors.ON_SURFACE)),
                                     ft.Text(f"{s['created_at'][:16]} · {s['msg_count']} messages",
                                             size=10, color=ft.Colors.with_opacity(0.4, ft.Colors.ON_SURFACE)),
@@ -358,6 +415,64 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         db.delete_all_chat_sessions()
         _refresh()
 
+    def _edit_title(session_id: int, current_title: str):
+        title_field = ft.TextField(
+            label="Session Title",
+            value=current_title,
+            autofocus=True,
+            max_length=60,
+        )
+        
+        edit_dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Edit Session Title", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=400,
+                content=ft.Column(
+                    tight=True,
+                    spacing=14,
+                    controls=[
+                        ft.Text("Give your conversation a memorable name:", size=13),
+                        title_field,
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: _close_edit_dialog()),
+                ft.ElevatedButton(
+                    "Save",
+                    icon=ft.Icons.SAVE,
+                    on_click=lambda _: _save_title(),
+                    style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_600, color=ft.Colors.WHITE),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        
+        def _close_edit_dialog():
+            edit_dlg.open = False
+            page.update()
+        
+        def _save_title():
+            new_title = title_field.value.strip()
+            if not new_title:
+                page.snack_bar = ft.SnackBar(ft.Text("Title cannot be empty!"))
+                page.snack_bar.open = True
+                page.update()
+                return
+            
+            db.update_chat_session_title(session_id, new_title)
+            _close_edit_dialog()
+            _refresh()
+            
+            page.snack_bar = ft.SnackBar(ft.Text("Title updated successfully!"))
+            page.snack_bar.open = True
+            page.update()
+        
+        page.overlay.append(edit_dlg)
+        edit_dlg.open = True
+        page.update()
+
     # Show the dialog
     page.overlay.append(dlg)
     dlg.open = True
@@ -457,10 +572,10 @@ def _open_ai_chat(
             conv_history.append({"role": "assistant", "content": reply})
             db.save_chat_message(sid, "assistant", reply)
 
-            # Optional: auto-update session title on first real reply
+            # Auto-update session title with smart naming on first real reply
             if len(conv_history) == 2:  # first user + first AI reply
-                short = reply.replace("\n", " ")[:55].rstrip()
-                db.update_chat_session_title(sid, short)
+                title = _generate_session_title(conv_history[0]["content"], reply)
+                db.update_chat_session_title(sid, title)
 
             _set_busy(False)
             messages_col.controls.append(_ai_bubble(reply, bubble_w))
