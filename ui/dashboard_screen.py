@@ -906,6 +906,7 @@ def _section_card(
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=14, bottom=14),
             border_radius=18,
+            expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.Alignment(-1, -1),
                 end=ft.Alignment(1, 1),
@@ -917,6 +918,7 @@ def _section_card(
             border=ft.border.all(1, ft.Colors.with_opacity(0.10, accent_color)),
             content=ft.Column(
                 spacing=12,
+                expand=True,
                 controls=[
                     ft.Row(
                         spacing=10,
@@ -1042,8 +1044,8 @@ def _chart_card(
                 alignment=ft.Alignment(0, 0),
                 content=ft.Image(
                     src=f"data:image/png;base64,{b64}",
-                    fit=ft.BoxFit.CONTAIN,
-                    height=image_height,
+                    fit=ft.BoxFit.FIT_WIDTH,
+                    expand=True,
                 ),
             )
             if b64 else
@@ -1061,11 +1063,14 @@ def _chart_card(
     )
 
 
+_CARD_CONTENT_HEIGHT = 260  # Fixed height for all card body areas
+
+
 def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn) -> ft.Control:
-    rows = sorted(expense_map.items(), key=lambda item: item[1], reverse=True)[:5]
+    rows = sorted(expense_map.items(), key=lambda item: item[1], reverse=True)
     if not rows:
         body = ft.Container(
-            height=220,
+            height=_CARD_CONTENT_HEIGHT,
             alignment=ft.Alignment(0, 0),
             content=ft.Text(
                 "Add a few expenses to unlock the spending leaderboard.",
@@ -1075,16 +1080,15 @@ def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn
             ),
         )
     else:
-        table_rows: list[ft.Control] = [
-            ft.Row(
-                controls=[
-                    ft.Container(expand=1, content=ft.Text("Rank", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=5, content=ft.Text("Category", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text("Share", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Amount", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                ],
-            ),
-        ]
+        header = ft.Row(
+            controls=[
+                ft.Container(expand=1, content=ft.Text("Rank", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=5, content=ft.Text("Category", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text("Share", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Amount", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+            ],
+        )
+        table_rows: list[ft.Control] = []
         for idx, (category, amount) in enumerate(rows, start=1):
             share = (amount / month_total * 100) if month_total else 0.0
             table_rows.append(
@@ -1102,7 +1106,19 @@ def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn
                     ),
                 )
             )
-        body = ft.Column(spacing=8, controls=table_rows)
+        body = ft.Column(
+            spacing=0,
+            controls=[
+                header,
+                ft.Container(height=8),
+                ft.Column(
+                    spacing=8,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=_CARD_CONTENT_HEIGHT - 28,
+                    controls=table_rows,
+                ),
+            ],
+        )
 
     return _section_card(
         "Spending Leaderboard",
@@ -1116,7 +1132,7 @@ def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn
 def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) -> ft.Control:
     if not monthly_rows:
         body = ft.Container(
-            height=220,
+            height=_CARD_CONTENT_HEIGHT,
             alignment=ft.Alignment(0, 0),
             content=ft.Text(
                 "Cashflow history will appear after you log a few weeks of activity.",
@@ -1126,19 +1142,18 @@ def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) 
             ),
         )
     else:
-        rows: list[ft.Control] = [
-            ft.Row(
-                controls=[
-                    ft.Container(expand=2, content=ft.Text("Month", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Income", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Spend", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Net", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
-                ],
-            ),
-        ]
-        for label, income, expense in monthly_rows[-4:]:
+        header = ft.Row(
+            controls=[
+                ft.Container(expand=2, content=ft.Text("Month", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Income", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Spend", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text("Net", size=10, weight=ft.FontWeight.BOLD, color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE))),
+            ],
+        )
+        data_rows: list[ft.Control] = []
+        for label, income, expense in monthly_rows:
             net = income - expense
-            rows.append(
+            data_rows.append(
                 ft.Container(
                     padding=ft.Padding(left=10, right=10, top=10, bottom=10),
                     border_radius=12,
@@ -1153,11 +1168,23 @@ def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) 
                     ),
                 )
             )
-        body = ft.Column(spacing=8, controls=rows)
+        body = ft.Column(
+            spacing=0,
+            controls=[
+                header,
+                ft.Container(height=8),
+                ft.Column(
+                    spacing=8,
+                    scroll=ft.ScrollMode.AUTO,
+                    height=_CARD_CONTENT_HEIGHT - 28,
+                    controls=data_rows,
+                ),
+            ],
+        )
 
     return _section_card(
         "Cashflow Table",
-        "A compact month-by-month table that stretches with the window.",
+        "Month-by-month income, spending, and net summary.",
         icon=ft.Icons.GRID_VIEW_ROUNDED,
         accent_color="#22c55e",
         content=body,
@@ -1183,8 +1210,8 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     # Budget limits for progress bars
     budget_limits = db.get_budget_limits()
 
-    # Upcoming recurring bills
-    upcoming = db.get_upcoming_recurring(days=7)
+    # Upcoming recurring bills — all active recurring, sorted by next_date
+    upcoming = db.get_upcoming_recurring(days=365 * 10)
 
     recent_transactions = db.get_transactions(date_from=(today - timedelta(days=210)).isoformat())
     analytics_rows = [
@@ -1485,7 +1512,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     # Simpler, reliable budget progress bar using ProgressBar
     budget_section_controls: list[ft.Control] = []
-    for b in budget_limits[:6]:
+    for b in budget_limits:
         spent = expense_map.get(b.category, 0.0)
         limit = b.monthly_limit
         pct = min(spent / limit, 1.0) if limit > 0 else 0.0
@@ -1534,10 +1561,15 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                                     size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
                         ],
                     ),
-                    *(budget_section_controls if budget_section_controls else [
-                        ft.Text("No budget limits set yet. Add them in the Budgets tab.",
-                                size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
-                    ]),
+                    ft.Column(
+                        spacing=12,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_CARD_CONTENT_HEIGHT,
+                        controls=budget_section_controls if budget_section_controls else [
+                            ft.Text("No budget limits set yet. Add them in the Budgets tab.",
+                                    size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
+                        ],
+                    ),
                 ],
             ),
         ),
@@ -1545,7 +1577,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     # ── UPCOMING BILLS ──────────────────────────────────────────────────────
     upcoming_controls: list[ft.Control] = []
-    for u in upcoming[:4]:
+    for u in upcoming:
         days_away = u["days_away"]
         if days_away < 0:
             chip_color = ft.Colors.RED_400; chip_text = "OVERDUE"
@@ -1592,12 +1624,19 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 controls=[
                     ft.Row(spacing=8, controls=[
                         ft.Text("📅", size=16),
-                        ft.Text("Upcoming Bills (7 days)", weight=ft.FontWeight.BOLD, size=14),
+                        ft.Text("Upcoming Bills", weight=ft.FontWeight.BOLD, size=14),
+                        ft.Text(f"({len(upcoming_controls)} active)",
+                                size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
                     ]),
-                    *(upcoming_controls if upcoming_controls else [
-                        ft.Text("No bills due in the next 7 days. 🎉",
-                                size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
-                    ]),
+                    ft.Column(
+                        spacing=10,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_CARD_CONTENT_HEIGHT,
+                        controls=upcoming_controls if upcoming_controls else [
+                            ft.Text("No active recurring bills found. 🎉",
+                                    size=12, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
+                        ],
+                    ),
                 ],
             ),
         ),
@@ -1707,9 +1746,22 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
         ft.ResponsiveRow(
             controls=[
-                ft.Container(col={"xs": 12, "lg": 4}, content=budget_card or ft.Container()),
-                ft.Container(col={"xs": 12, "lg": 4}, content=upcoming_card or ft.Container()),
-                ft.Container(col={"xs": 12, "lg": 4}, content=_cashflow_table_card(monthly_cashflow, peso)),
+                ft.Container(
+                    col={"xs": 12, "md": 6},
+                    content=budget_card or ft.Container(),
+                ),
+                ft.Container(
+                    col={"xs": 12, "md": 6},
+                    content=upcoming_card or ft.Container(),
+                ),
+            ],
+        ),
+        ft.ResponsiveRow(
+            controls=[
+                ft.Container(
+                    col={"xs": 12},
+                    content=_cashflow_table_card(monthly_cashflow, peso),
+                ),
             ],
         ),
     ]
