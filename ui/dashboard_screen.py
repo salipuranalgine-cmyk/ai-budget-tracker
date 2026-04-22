@@ -757,7 +757,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             reply, notif_title, notif_msg = _parse_notify_tag(raw_reply)
             if notif_title and notif_msg:
                 # AI explicitly flagged something — add it directly
-                notif.add("ai", notif_title, notif_msg)
+                notif.add_ai_insight(notif_title, notif_msg)
             else:
                 # Fallback: keyword-scan the reply for financial alerts
                 notif.scan_ai_reply(reply)

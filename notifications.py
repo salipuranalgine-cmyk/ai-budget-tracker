@@ -14,6 +14,13 @@ TYPE_BUDGET_WARNING  = "budget_warning"
 TYPE_BILL_DUE        = "bill_due"
 TYPE_AI_INSIGHT      = "ai_insight"
 
+
+def _normalize_type(notif_type: str) -> str:
+    """Keep backwards compatibility with older AI notification aliases."""
+    if notif_type == "ai":
+        return TYPE_AI_INSIGHT
+    return notif_type
+
 # ── Notification dataclass (used by UI) ───────────────────────────────────────
 @dataclass
 class Notification:
@@ -28,7 +35,7 @@ class Notification:
     def from_row(row: dict) -> "Notification":
         return Notification(
             id=row["id"],
-            notif_type=row["notif_type"],
+            notif_type=_normalize_type(row["notif_type"]),
             title=row["title"],
             body=row["message"],
             read=bool(row["is_read"]),
@@ -85,7 +92,7 @@ def unread_count() -> int:
 # ── Write API ─────────────────────────────────────────────────────────────────
 
 def add(notif_type: str, title: str, message: str) -> int:
-    nid = db.add_notification(notif_type, title, message)
+    nid = db.add_notification(_normalize_type(notif_type), title, message)
     _fire()
     return nid
 
@@ -97,6 +104,16 @@ def mark_read(notif_id: int) -> None:
 
 def mark_all_read() -> None:
     db.mark_all_notifications_read()
+    _fire()
+
+
+def delete(notif_id: int) -> None:
+    db.delete_notification(notif_id)
+    _fire()
+
+
+def delete_selected(notif_ids: list[int]) -> None:
+    db.delete_notifications(notif_ids)
     _fire()
 
 
@@ -175,3 +192,28 @@ def generate_bill_notifications(upcoming: list) -> None:
 def add_ai_insight(title: str, message: str) -> None:
     """Add an AI-generated insight notification (persists across sessions)."""
     add(TYPE_AI_INSIGHT, title, message)
+
+
+def scan_ai_reply(reply: str) -> None:
+    """
+    Fallback keyword scanner for urgent AI advice when the structured
+    [NOTIFY: ...] tag was not included in the reply.
+    """
+    compact = " ".join((reply or "").split())
+    if not compact:
+        return
+
+    lower = compact.lower()
+    rules = [
+        (("budget exceeded", "over budget", "exceeded your budget"), "AI Budget Alert"),
+        (("low balance", "dangerously low", "cash is running out"), "AI Low Balance Warning"),
+        (("overdue", "past due", "bill is due today", "due today"), "AI Bill Warning"),
+    ]
+
+    for keywords, title in rules:
+        if any(keyword in lower for keyword in keywords):
+            message = compact[:180]
+            if len(compact) > 180:
+                message += "..."
+            add_ai_insight(title, message)
+            return

@@ -1,7 +1,6 @@
 """
 ai_insights.py
-AI budget analysis — tries Ollama (offline) first, falls back to
-Anthropic claude-haiku (online) if an API key is stored.
+AI budget analysis - chooses between local Ollama and Anthropic.
 
 Supports both one-shot insight and multi-turn chat.
 """
@@ -9,44 +8,102 @@ from __future__ import annotations
 
 import json
 import urllib.request
-import urllib.error
 
 # A message dict used for conversation history
 # {"role": "user" | "assistant", "content": str}
 Message = dict[str, str]
+
+DEFAULT_OLLAMA_MODEL = "llama3.2"
+OLLAMA_API_TAGS_URL = "http://127.0.0.1:11434/api/tags"
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+_ollama_model_cache: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Provider selection
+# ---------------------------------------------------------------------------
+
+def _get_provider_preference() -> str:
+    try:
+        import database as db
+        return db.get_ai_provider_mode()
+    except Exception:
+        return "smart"
+
+
+def _get_provider_order(api_key: str, preference: str | None = None) -> list[str]:
+    mode = preference or _get_provider_preference()
+    has_online = bool(api_key)
+
+    if mode == "online_first":
+        return (["anthropic"] if has_online else []) + ["ollama"]
+    if mode == "offline_first":
+        return ["ollama"] + (["anthropic"] if has_online else [])
+    return (["anthropic"] if has_online else []) + ["ollama"]
 
 
 # ---------------------------------------------------------------------------
 # Ollama (offline / local LLM)
 # ---------------------------------------------------------------------------
 
+def _is_ollama_reachable(timeout: float = 0.75) -> bool:
+    try:
+        with urllib.request.urlopen(OLLAMA_API_TAGS_URL, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def _pick_ollama_model() -> str:
+    global _ollama_model_cache
+    if _ollama_model_cache:
+        return _ollama_model_cache
+
     try:
         import ollama
+
         data = ollama.list()
         if hasattr(data, "models"):
             names = [getattr(m, "model", None) or getattr(m, "name", None) for m in data.models]
         else:
             names = [m.get("model") or m.get("name") for m in data.get("models", [])]
+
         names = [n for n in names if n]
-        for preferred in ("llama3.2", "llama3", "qwen2.5", "phi3", "mistral", "gemma"):
+        for preferred in (
+            "llama3.2:1b",
+            "qwen2.5:0.5b",
+            "phi3:mini",
+            "gemma2:2b",
+            "llama3.2",
+            "qwen2.5",
+            "phi3",
+            "mistral",
+            "gemma",
+        ):
             for model in names:
                 if preferred in model.lower():
+                    _ollama_model_cache = model
                     return model
-        return names[0] if names else "llama3.2"
+
+        _ollama_model_cache = names[0] if names else DEFAULT_OLLAMA_MODEL
+        return _ollama_model_cache
     except Exception:
-        return "llama3.2"
+        return DEFAULT_OLLAMA_MODEL
 
 
 def _ask_ollama_chat(messages: list[Message]) -> str | None:
     """Send a full conversation history to Ollama. Returns reply or None."""
+    if not _is_ollama_reachable():
+        return None
+
     try:
         import ollama
-        model = _pick_ollama_model()
+
         response = ollama.chat(
-            model=model,
+            model=_pick_ollama_model(),
             messages=messages,
-            options={"temperature": 0.5},
+            options={"temperature": 0.35},
         )
         if hasattr(response, "message"):
             return response.message.content
@@ -59,10 +116,6 @@ def _ask_ollama_chat(messages: list[Message]) -> str | None:
 # Anthropic API (online fallback)
 # ---------------------------------------------------------------------------
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"
-
-
 def _ask_anthropic_chat(
     messages: list[Message],
     api_key: str,
@@ -71,9 +124,10 @@ def _ask_anthropic_chat(
     """Send full conversation history to Anthropic. Returns reply or None."""
     if not api_key:
         return None
+
     payload_dict: dict = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 800,
+        "max_tokens": 500,
         "messages": messages,
     }
     if system_prompt:
@@ -104,26 +158,26 @@ def _ask_anthropic_chat(
 
 def _build_system_prompt(financial_context: str) -> str:
     return f"""You are a smart, friendly personal finance advisor built into a budget tracking app.
-Your user can be from any country — adapt your language based on their currency and spending context.
+Your user can be from any country - adapt your language based on their currency and spending context.
 
 You have access to the user's current financial data below. Use it to give accurate, personalized advice.
 When the user asks questions, answer based on this data. Be conversational, concise, and encouraging.
 
 Guidelines:
 - Write in plain, friendly language anyone can understand
-- Keep replies concise — 2 to 4 short paragraphs or bullet points max
+- Keep replies concise - 2 to 4 short paragraphs or bullet points max
 - Use the currency symbol from the data (do not assume it's always peso)
 - Flag budget issues clearly but kindly
 - Give actionable tips the user can act on right now
-- Do NOT use markdown headers or bold formatting — plain text or bullet points only
+- Do NOT use markdown headers or bold formatting - plain text or bullet points only
 
-NOTIFICATION RULE — If you spot an urgent financial issue (budget exceeded, bill overdue, dangerously low balance, etc.), append this exact tag on its own line at the very end of your reply:
+NOTIFICATION RULE - If you spot an urgent financial issue (budget exceeded, bill overdue, dangerously low balance, etc.), append this exact tag on its own line at the very end of your reply:
 [NOTIFY: Short Alert Title | One-sentence description of the issue.]
 Only include it when truly warranted. Do not include it for routine answers.
 Examples:
-[NOTIFY: Budget Exceeded — Food | You've spent 112% of your food budget this month.]
+[NOTIFY: Budget Exceeded - Food | You've spent 112% of your food budget this month.]
 [NOTIFY: Low Balance Warning | Your balance is below your estimated monthly expenses.]
-[NOTIFY: Bill Overdue — Electricity | Your electricity bill is past its due date.]
+[NOTIFY: Bill Overdue - Electricity | Your electricity bill is past its due date.]
 
 Current financial data:
 {financial_context}
@@ -147,28 +201,31 @@ def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
     """Legacy one-shot insight (still used if needed)."""
     system = _build_system_prompt(expenses_summary)
     messages: list[Message] = [{"role": "user", "content": _build_initial_prompt()}]
-
-    # Ollama: pass system as first user message since it doesn't have a system param
     ollama_messages = [{"role": "user", "content": system + "\n\n" + _build_initial_prompt()}]
-    result = _ask_ollama_chat(ollama_messages)
-    if result:
-        return result.strip()
+    tried_anthropic = False
 
-    if api_key:
-        result = _ask_anthropic_chat(messages, api_key, system_prompt=system)
+    for provider in _get_provider_order(api_key):
+        if provider == "anthropic":
+            tried_anthropic = True
+            result = _ask_anthropic_chat(messages, api_key, system_prompt=system)
+        else:
+            result = _ask_ollama_chat(ollama_messages)
+
         if result:
             return result.strip()
+
+    if api_key and tried_anthropic:
         return (
-            "⚠️ Your API key was found but we could not reach Anthropic. "
+            "Your API key was found but we could not reach Anthropic. "
             "Please check your internet connection and try again."
         )
 
     return (
-        "🤖 AI is not available right now.\n\n"
+        "AI is not available right now.\n\n"
         "You have two options to enable it:\n"
-        "• Offline: Install Ollama (ollama.com) and pull a model like llama3.2 — "
+        "- Offline: Install Ollama (ollama.com) and pull a model like llama3.2 - "
         "works without internet once set up.\n"
-        "• Online: Add your Anthropic API key in Settings → AI Setup — "
+        "- Online: Add your Anthropic API key in Settings > AI Setup - "
         "works on any device with an internet connection.\n\n"
         "Tap Ask AI again once either option is ready."
     )
@@ -185,26 +242,25 @@ def chat_with_ai(
     Returns the AI's next reply as a string.
     """
     system = _build_system_prompt(financial_context)
+    ollama_messages: list[Message] = [{"role": "user", "content": system}] + history
+    tried_anthropic = False
 
-    # --- Ollama: inject system as a leading user message ---
-    ollama_messages: list[Message] = [
-        {"role": "user", "content": system}
-    ] + history
-    result = _ask_ollama_chat(ollama_messages)
-    if result:
-        return result.strip()
+    for provider in _get_provider_order(api_key):
+        if provider == "anthropic":
+            tried_anthropic = True
+            result = _ask_anthropic_chat(history, api_key, system_prompt=system)
+        else:
+            result = _ask_ollama_chat(ollama_messages)
 
-    # --- Anthropic: use proper system param ---
-    if api_key:
-        result = _ask_anthropic_chat(history, api_key, system_prompt=system)
         if result:
             return result.strip()
+
+    if api_key and tried_anthropic:
         return (
-            "⚠️ Could not reach Anthropic. "
-            "Please check your internet connection and try again."
+            "Could not reach Anthropic. Please check your internet connection and try again."
         )
 
     return (
-        "🤖 AI is not available. Enable Ollama (offline) or add your "
-        "Anthropic API key in Settings → AI Setup."
+        "AI is not available. Enable Ollama (offline) or add your "
+        "Anthropic API key in Settings > AI Setup."
     )

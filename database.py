@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from models import BudgetLimit, Transaction, RecurringTransaction
 
@@ -727,6 +727,34 @@ def set_anthropic_api_key(key: str) -> None:
     conn.commit()
     conn.close()
 
+
+def get_ai_provider_mode() -> str:
+    """Return which AI provider strategy the app should prefer."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT value FROM app_meta WHERE key = 'ai_provider_mode'"
+    ).fetchone()
+    conn.close()
+    value = row["value"] if row else "smart"
+    return value if value in {"smart", "offline_first", "online_first"} else "smart"
+
+
+def set_ai_provider_mode(mode: str) -> None:
+    normalized = (mode or "smart").strip() or "smart"
+    if normalized not in {"smart", "offline_first", "online_first"}:
+        normalized = "smart"
+
+    conn = _connect()
+    conn.execute(
+        """
+        INSERT INTO app_meta(key, value) VALUES('ai_provider_mode', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (normalized,),
+    )
+    conn.commit()
+    conn.close()
+
 # ---------------------------------------------------------------------------
 # Notifications
 # ---------------------------------------------------------------------------
@@ -795,6 +823,28 @@ def mark_notification_read(notif_id: int) -> None:
 def mark_all_notifications_read() -> None:
     conn = _connect()
     conn.execute("UPDATE notifications SET is_read = 1")
+    conn.commit()
+    conn.close()
+
+
+def delete_notification(notif_id: int) -> None:
+    conn = _connect()
+    conn.execute("DELETE FROM notifications WHERE id = ?", (notif_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_notifications(notif_ids: Sequence[int]) -> None:
+    ids = [int(nid) for nid in notif_ids if nid is not None]
+    if not ids:
+        return
+
+    placeholders = ",".join("?" for _ in ids)
+    conn = _connect()
+    conn.execute(
+        f"DELETE FROM notifications WHERE id IN ({placeholders})",
+        tuple(ids),
+    )
     conn.commit()
     conn.close()
 
