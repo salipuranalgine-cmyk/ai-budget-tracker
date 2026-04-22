@@ -59,8 +59,14 @@ def main(page: ft.Page):
 
     # ── USER SELECTION SCREEN ────────────────────────────────────────────────
 
-    def show_user_select():
+    def show_user_select(auto_resume: bool = True):
         """Render the profile picker. Called on first launch or when switching users."""
+        if auto_resume:
+            remembered_user = um.get_last_active_user()
+            if remembered_user is not None:
+                launch_main_app(remembered_user)
+                return
+
         page.navigation_bar = None
         page.appbar = ft.AppBar(
             title=ft.Text("AI Smart Saver", weight=ft.FontWeight.BOLD, size=18),
@@ -319,6 +325,7 @@ def main(page: ft.Page):
 
     def launch_main_app(user: um.UserProfile):
         """Initialize the budget app for the selected user profile."""
+        um.set_last_active_user(user.id)
         db.set_user_db(um.get_db_path(user.id))
         db.init_db()
         db.init_notifications_table()
@@ -1069,7 +1076,7 @@ def main(page: ft.Page):
             notif.unsubscribe(_refresh_bell)
             notif.reset()
             nav_ref[0] = None
-            show_user_select()
+            show_user_select(auto_resume=False)
 
         page.appbar = ft.AppBar(
             title=title,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import threading
 from datetime import date, timedelta
@@ -711,10 +712,14 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             _set_input_enabled(True)
             if typing_ind in messages_col.controls:
                 messages_col.controls.remove(typing_ind)
-            if dlg.open:
-                _add_ai_bubble(reply)
-                page.update()
-            else:
+            try:
+                if dlg.open:
+                    _add_ai_bubble(reply)
+                    page.update()
+                else:
+                    with _bg_lock:
+                        _bg_results[sid] = reply
+            except Exception:
                 with _bg_lock:
                     _bg_results[sid] = reply
         with _sessions_meta_lock:
@@ -751,8 +756,13 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             messages_col.controls.append(typing_ind)
         page.update()
 
-        def _worker():
-            raw_reply = chat_with_ai(list(conv_history), financial_context, api_key)
+        async def _worker():
+            raw_reply = await asyncio.to_thread(
+                chat_with_ai,
+                list(conv_history),
+                financial_context,
+                api_key,
+            )
             # Strip any [NOTIFY: title | message] tag before saving/displaying
             reply, notif_title, notif_msg = _parse_notify_tag(raw_reply)
             if notif_title and notif_msg:
@@ -767,18 +777,22 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             if _stop_requested[0]:
                 _stop_requested[0] = False
                 return
-            db.save_chat_message(sid, "assistant", reply)
+            await asyncio.to_thread(db.save_chat_message, sid, "assistant", reply)
             user_msgs = [m for m in conv_history if m["role"] == "user"]
             if len(user_msgs) == 1:
                 title = _generate_session_title(user_msgs[0]["content"], reply)
-                db.update_chat_session_title(sid, title)
+                await asyncio.to_thread(db.update_chat_session_title, sid, title)
             if callback:
-                callback(reply)
+                try:
+                    callback(reply)
+                except Exception:
+                    with _bg_lock:
+                        _bg_results[sid] = reply
             else:
                 with _bg_lock:
                     _bg_results[sid] = reply
 
-        threading.Thread(target=_worker, daemon=True).start()
+        page.run_task(_worker)
 
     def _open_history(_):
         _close()
