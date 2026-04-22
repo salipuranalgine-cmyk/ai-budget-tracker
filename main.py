@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import flet as ft
 
 import database as db
@@ -36,7 +38,10 @@ def _close_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
 def main(page: ft.Page):
     um.init_users_db()
 
+    icon_path = Path(__file__).resolve().parent / "assets" / "Icon.ico"
+
     page.title = "AI Smart Saver - Budget Guardian"
+    page.window.icon = str(icon_path)
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 12
     page.window_min_width = 360
