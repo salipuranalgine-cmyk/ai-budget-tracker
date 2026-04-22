@@ -211,7 +211,7 @@ def _build_bar_chart(expense_map: dict[str, float]) -> str | None:
 # Chat bubble helpers
 # ---------------------------------------------------------------------------
 
-def _ai_bubble(text: str, bubble_w: int) -> ft.Control:
+def _ai_bubble(text: str, bubble_w: int = 0) -> ft.Control:
     return ft.Row(
         alignment=ft.MainAxisAlignment.START,
         vertical_alignment=ft.CrossAxisAlignment.START,
@@ -223,7 +223,7 @@ def _ai_bubble(text: str, bubble_w: int) -> ft.Control:
                 content=ft.Text("🤖", size=16),
             ),
             ft.Container(
-                width=bubble_w,
+                expand=True,
                 content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
                 padding=ft.Padding(left=14, right=14, top=10, bottom=10),
                 bgcolor="#1e293b",
@@ -246,6 +246,7 @@ def _typing_bubble() -> ft.Control:
                 content=ft.Text("🤖", size=16),
             ),
             ft.Container(
+                expand=True,
                 margin=ft.Margin(left=8, bottom=10, top=0, right=0),
                 content=ft.Row(
                     spacing=6,
@@ -533,9 +534,8 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 def _open_ai_chat(page, financial_context, api_key, session_id, history):
     win_w = getattr(page, "window_width", None) or getattr(page, "width", None) or 900
     win_h = getattr(page, "window_height", None) or getattr(page, "height", None) or 700
-    dlg_w = max(400, min(720, int(win_w * 0.82)))
-    dlg_h = max(440, min(700, int(win_h * 0.80)))
-    bubble_w = dlg_w - 90
+    dlg_w = max(320, min(720, int(win_w * 0.92)))
+    dlg_h = max(440, min(700, int(win_h * 0.88)))
 
     current_session = [session_id]
     conv_history = list(history)
@@ -564,11 +564,11 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
 
     def _add_user_bubble(text, hist_idx):
         current_text = [text]
-        msg_col = ft.Column(spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END)
+        msg_col = ft.Column(spacing=2, horizontal_alignment=ft.CrossAxisAlignment.END, expand=True)
         outer_row = ft.Row(
             alignment=ft.MainAxisAlignment.END,
             vertical_alignment=ft.CrossAxisAlignment.END,
-            controls=[ft.Container(expand=True), msg_col],
+            controls=[ft.Container(width=48), msg_col],
         )
         btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
         btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
@@ -576,7 +576,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         def _render_view():
             msg_col.controls = [
                 ft.Container(
-                    width=bubble_w,
+                    expand=True,
                     content=ft.Text(current_text[0], selectable=True, size=13, color=ft.Colors.WHITE),
                     padding=ft.Padding(left=14, right=14, top=10, bottom=10),
                     bgcolor="#0369a1",
@@ -615,7 +615,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             ef.on_submit = lambda e: _confirm()
             msg_col.controls = [
                 ft.Container(
-                    width=bubble_w, bgcolor="#0f172a", border_radius=12,
+                    expand=True, bgcolor="#0f172a", border_radius=12,
                     padding=ft.padding.all(8), border=ft.border.all(1, "#334155"),
                     content=ft.Column(spacing=6, controls=[
                         ef,
@@ -637,7 +637,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         messages_col.controls.append(outer_row)
 
     def _add_ai_bubble(text):
-        messages_col.controls.append(_ai_bubble(text, bubble_w))
+        messages_col.controls.append(_ai_bubble(text))
 
     for idx, msg in enumerate(conv_history):
         if msg["role"] == "assistant":
