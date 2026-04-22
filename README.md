@@ -162,6 +162,8 @@ ollama pull llama3.2
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_12_01 PM" src="https://github.com/user-attachments/assets/e90841ff-e3f2-4d60-b8cc-9873f72c5592" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_12_18 PM" src="https://github.com/user-attachments/assets/75d2172f-f366-4ee0-b07d-4233db4cf1ea" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_23_06 PM" src="https://github.com/user-attachments/assets/364f0b5a-55e5-4e84-87ed-e4d09c0119bb" />
+<img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 9_54_45 PM" src="https://github.com/user-attachments/assets/fee253b3-e6bd-4558-a3b3-27068c48621f" />
+<img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 9_54_58 PM" src="https://github.com/user-attachments/assets/ff94aa65-d06c-444a-8a37-910cf0fd7587" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_23_36 PM" src="https://github.com/user-attachments/assets/8a579961-3e4a-4eb0-99ac-4414f7174ee4" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_23_49 PM" src="https://github.com/user-attachments/assets/6ad7bd61-9c82-49db-aee8-25f591d9a0ca" />
 
