@@ -3,6 +3,7 @@ from __future__ import annotations
 import flet as ft
 
 import database as db
+import notifications as notif
 import user_manager as um
 from ui.budgets_screen import budgets_screen
 from ui.dashboard_screen import dashboard_screen
@@ -320,11 +321,294 @@ def main(page: ft.Page):
         """Initialize the budget app for the selected user profile."""
         db.set_user_db(um.get_db_path(user.id))
         db.init_db()
+        db.init_notifications_table()
         applied = db.apply_due_recurring()
+
+        # Reset notifications for fresh session
+        notif.reset()
 
         title.value = "Dashboard"
 
+        # ── Notification bell state ──────────────────────────────────────────
+        bell_icon  = ft.Ref[ft.IconButton]()
+        badge_text = ft.Ref[ft.Text]()
+        badge_dot  = ft.Ref[ft.Container]()
+
+        def _refresh_bell():
+            count = notif.unread_count()
+            if badge_text.current:
+                badge_text.current.value   = str(count) if count < 100 else "99+"
+                badge_dot.current.visible  = count > 0
+                bell_icon.current.icon     = (
+                    ft.Icons.NOTIFICATIONS_ROUNDED if count > 0
+                    else ft.Icons.NOTIFICATIONS_OUTLINED
+                )
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        notif.subscribe(_refresh_bell)
+
+        # ── Notification panel dialog ────────────────────────────────────────
+        def _open_notif_panel(_=None):
+            notif_list = ft.Column(
+                spacing=8,
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+            )
+
+            TYPE_META = {
+                "budget_exceeded": ("🔴", "#ef4444"),
+                "budget_warning":  ("🟠", "#f97316"),
+                "bill_due":        ("📅", "#38bdf8"),
+                "ai_insight":      ("🤖", "#a78bfa"),
+                "info":            ("ℹ️",  "#64748b"),
+            }
+
+            def _rebuild_list():
+                notif_list.controls.clear()
+                all_notifs = notif.get_all()
+                if not all_notifs:
+                    notif_list.controls.append(
+                        ft.Container(
+                            padding=40,
+                            alignment=ft.Alignment(0, 0),
+                            content=ft.Column(
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                spacing=8,
+                                controls=[
+                                    ft.Text("🔔", size=36),
+                                    ft.Text("All caught up!",
+                                            size=15, weight=ft.FontWeight.BOLD),
+                                    ft.Text("No notifications yet.",
+                                            size=12,
+                                            color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
+                                ],
+                            ),
+                        )
+                    )
+                else:
+                    for n in all_notifs:
+                        icon_char, accent = TYPE_META.get(
+                            n.notif_type, ("🔔", "#64748b")
+                        )
+                        def _make_dismiss(nid):
+                            def _dismiss(_):
+                                notif.mark_read(nid)
+                                _rebuild_list()
+                                page.update()
+                            return _dismiss
+
+                        notif_list.controls.append(
+                            ft.Container(
+                                border_radius=12,
+                                bgcolor=ft.Colors.with_opacity(
+                                    0.03 if n.read else 0.08, ft.Colors.WHITE
+                                ),
+                                border=ft.border.all(
+                                    1,
+                                    ft.Colors.with_opacity(
+                                        0.06 if n.read else 0.18, accent
+                                    ),
+                                ),
+                                padding=ft.Padding(left=0, right=12, top=0, bottom=0),
+                                content=ft.Row(
+                                    vertical_alignment=ft.CrossAxisAlignment.START,
+                                    controls=[
+                                        # Colored left bar
+                                        ft.Container(
+                                            width=4,
+                                            border_radius=ft.BorderRadius(
+                                                top_left=12, bottom_left=12,
+                                                top_right=0, bottom_right=0,
+                                            ),
+                                            bgcolor=accent if not n.read
+                                            else ft.Colors.with_opacity(0.25, accent),
+                                            height=None,
+                                            expand=False,
+                                        ),
+                                        ft.Container(width=10),
+                                        # Icon
+                                        ft.Container(
+                                            padding=ft.padding.only(top=12),
+                                            content=ft.Text(icon_char, size=20),
+                                        ),
+                                        ft.Container(width=10),
+                                        # Content
+                                        ft.Column(
+                                            expand=True,
+                                            spacing=3,
+                                            controls=[
+                                                ft.Container(height=10),
+                                                ft.Row(
+                                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                                    controls=[
+                                                        ft.Text(
+                                                            n.title,
+                                                            size=13,
+                                                            weight=ft.FontWeight.BOLD
+                                                            if not n.read
+                                                            else ft.FontWeight.W_400,
+                                                            expand=True,
+                                                            color=ft.Colors.WHITE
+                                                            if not n.read
+                                                            else ft.Colors.with_opacity(
+                                                                0.6, ft.Colors.ON_SURFACE
+                                                            ),
+                                                        ),
+                                                        ft.Text(
+                                                            n.timestamp,
+                                                            size=10,
+                                                            color=ft.Colors.with_opacity(
+                                                                0.4, ft.Colors.ON_SURFACE
+                                                            ),
+                                                        ),
+                                                    ],
+                                                ),
+                                                ft.Text(
+                                                    n.body,
+                                                    size=12,
+                                                    max_lines=3,
+                                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                                    color=ft.Colors.with_opacity(
+                                                        0.5 if n.read else 0.78,
+                                                        ft.Colors.ON_SURFACE,
+                                                    ),
+                                                ),
+                                                ft.Container(height=8),
+                                            ],
+                                        ),
+                                        # Dismiss dot / mark-read button
+                                        ft.Container(
+                                            padding=ft.padding.only(top=12),
+                                            content=ft.IconButton(
+                                                icon=ft.Icons.CIRCLE
+                                                if not n.read
+                                                else ft.Icons.CIRCLE_OUTLINED,
+                                                icon_color=accent if not n.read
+                                                else ft.Colors.with_opacity(
+                                                    0.25, ft.Colors.ON_SURFACE
+                                                ),
+                                                icon_size=10,
+                                                tooltip="Mark as read",
+                                                on_click=_make_dismiss(n.id),
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                            )
+                        )
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+            def _mark_all(_):
+                notif.mark_all_read()
+                _rebuild_list()
+
+            def _clear_all(_):
+                notif.clear_all()
+                _rebuild_list()
+
+            panel_dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Row(spacing=8, controls=[
+                            ft.Text("🔔", size=20),
+                            ft.Text("Notifications",
+                                    weight=ft.FontWeight.BOLD, size=16),
+                        ]),
+                        ft.Row(spacing=0, controls=[
+                            ft.TextButton(
+                                "Mark all read",
+                                icon=ft.Icons.DONE_ALL_ROUNDED,
+                                on_click=_mark_all,
+                                style=ft.ButtonStyle(
+                                    color=ft.Colors.with_opacity(
+                                        0.6, ft.Colors.ON_SURFACE
+                                    )
+                                ),
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE_SWEEP_OUTLINED,
+                                icon_color=ft.Colors.RED_300,
+                                tooltip="Clear all",
+                                on_click=_clear_all,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_size=20,
+                                on_click=lambda _: _close_panel(),
+                            ),
+                        ]),
+                    ],
+                ),
+                content=ft.Container(
+                    width=480,
+                    height=500,
+                    content=notif_list,
+                ),
+                actions=[],
+            )
+
+            def _close_panel():
+                panel_dlg.open = False
+                page.update()
+
+            page.overlay.append(panel_dlg)
+            panel_dlg.open = True
+            _rebuild_list()
+            page.update()
+
+        # ── Bell button widget ───────────────────────────────────────────────
+        bell_button = ft.Stack(
+            width=48,
+            height=48,
+            controls=[
+                ft.IconButton(
+                    ref=bell_icon,
+                    icon=ft.Icons.NOTIFICATIONS_OUTLINED,
+                    icon_size=24,
+                    tooltip="Notifications",
+                    on_click=_open_notif_panel,
+                ),
+                ft.Container(
+                    ref=badge_dot,
+                    visible=False,
+                    right=6,
+                    top=6,
+                    width=18,
+                    height=18,
+                    border_radius=9,
+                    bgcolor=ft.Colors.RED_500,
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Text(
+                        "0",
+                        ref=badge_text,
+                        size=10,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.WHITE,
+                    ),
+                ),
+            ],
+        )
+
+        # ── Data changed handler — refresh notifications on every change ──────
         def on_data_changed():
+            # Re-scan budgets + bills whenever data changes
+            currency_code = db.get_currency()
+            expense_map   = db.get_month_expense_summary(
+                __import__("datetime").date.today().strftime("%Y-%m")
+            )
+            budget_limits = db.get_budget_limits()
+            upcoming      = db.get_upcoming_recurring(days=365 * 10)
+            notif.generate_budget_notifications(budget_limits, expense_map)
+            notif.generate_bill_notifications(upcoming)
+
             if nav_ref[0] is not None:
                 render(nav_ref[0].selected_index)
 
@@ -374,6 +658,8 @@ def main(page: ft.Page):
 
         def switch_user(_):
             """Return to the profile selection screen."""
+            notif.unsubscribe(_refresh_bell)
+            notif.reset()
             nav_ref[0] = None
             show_user_select()
 
@@ -381,19 +667,20 @@ def main(page: ft.Page):
             title=title,
             center_title=False,
             actions=[
-                # Shows current user + lets them switch
                 ft.TextButton(
                     content=ft.Row(
                         spacing=6,
                         tight=True,
                         controls=[
                             ft.Text(user.emoji, size=18),
-                            ft.Text(user.name, size=13, color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE)),
+                            ft.Text(user.name, size=13,
+                                    color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE)),
                         ],
                     ),
                     tooltip="Switch profile",
                     on_click=switch_user,
                 ),
+                bell_button,
                 ft.IconButton(ft.Icons.DARK_MODE, on_click=toggle_theme),
             ],
         )
@@ -403,7 +690,17 @@ def main(page: ft.Page):
             page.add(content)
         page.update()
 
+        # Initial render + notification scan
         render(0)
+
+        # Generate initial notifications after first render
+        expense_map   = db.get_month_expense_summary(
+            __import__("datetime").date.today().strftime("%Y-%m")
+        )
+        budget_limits = db.get_budget_limits()
+        upcoming      = db.get_upcoming_recurring(days=365 * 10)
+        notif.generate_budget_notifications(budget_limits, expense_map)
+        notif.generate_bill_notifications(upcoming)
 
         if applied > 0:
             page.snack_bar = ft.SnackBar(

@@ -117,6 +117,14 @@ Guidelines:
 - Give actionable tips the user can act on right now
 - Do NOT use markdown headers or bold formatting — plain text or bullet points only
 
+NOTIFICATION RULE — If you spot an urgent financial issue (budget exceeded, bill overdue, dangerously low balance, etc.), append this exact tag on its own line at the very end of your reply:
+[NOTIFY: Short Alert Title | One-sentence description of the issue.]
+Only include it when truly warranted. Do not include it for routine answers.
+Examples:
+[NOTIFY: Budget Exceeded — Food | You've spent 112% of your food budget this month.]
+[NOTIFY: Low Balance Warning | Your balance is below your estimated monthly expenses.]
+[NOTIFY: Bill Overdue — Electricity | Your electricity bill is past its due date.]
+
 Current financial data:
 {financial_context}
 """

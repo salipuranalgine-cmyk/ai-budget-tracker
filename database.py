@@ -727,6 +727,93 @@ def set_anthropic_api_key(key: str) -> None:
     conn.commit()
     conn.close()
 
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def init_notifications_table() -> None:
+    """Create notifications table if it doesn't exist (safe to call repeatedly)."""
+    conn = _connect()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            notif_type  TEXT    NOT NULL,
+            title       TEXT    NOT NULL,
+            message     TEXT    NOT NULL,
+            is_read     INTEGER DEFAULT 0,
+            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_notification(notif_type: str, title: str, message: str) -> int:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO notifications (notif_type, title, message) VALUES (?, ?, ?)",
+        (notif_type, title, message),
+    )
+    conn.commit()
+    nid = cur.lastrowid
+    conn.close()
+    return int(nid)
+
+
+def get_notifications() -> list[dict]:
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT id, notif_type, title, message, is_read, created_at
+        FROM notifications
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_unread_notifications_count() -> int:
+    conn = _connect()
+    row = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM notifications WHERE is_read = 0"
+    ).fetchone()
+    conn.close()
+    return int(row["cnt"])
+
+
+def mark_notification_read(notif_id: int) -> None:
+    conn = _connect()
+    conn.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (notif_id,))
+    conn.commit()
+    conn.close()
+
+
+def mark_all_notifications_read() -> None:
+    conn = _connect()
+    conn.execute("UPDATE notifications SET is_read = 1")
+    conn.commit()
+    conn.close()
+
+
+def delete_notifications_by_type(notif_type: str) -> None:
+    """Remove all notifications of a specific type (used to refresh auto-generated ones)."""
+    conn = _connect()
+    conn.execute("DELETE FROM notifications WHERE notif_type = ?", (notif_type,))
+    conn.commit()
+    conn.close()
+
+
+def clear_all_notifications() -> None:
+    conn = _connect()
+    conn.execute("DELETE FROM notifications")
+    conn.commit()
+    conn.close()
+
+
 def is_first_run() -> bool:
     conn = _connect()
     row = conn.execute("SELECT value FROM app_meta WHERE key = 'first_run_done'").fetchone()

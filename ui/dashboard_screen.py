@@ -20,8 +20,27 @@ _sessions_meta_lock = threading.Lock()
 
 import pandas as pd
 import database as db
+import notifications as notif
 from ai_insights import chat_with_ai
 from ui.constants import now_month, make_peso
+
+
+# ---------------------------------------------------------------------------
+# AI [NOTIFY:] tag parser
+# ---------------------------------------------------------------------------
+
+def _parse_notify_tag(reply: str) -> tuple[str, str | None, str | None]:
+    """
+    Strip a trailing [NOTIFY: title | message] tag from an AI reply.
+    Returns (clean_reply, title_or_None, message_or_None).
+    """
+    import re
+    pattern = r'\[NOTIFY:\s*(.+?)\s*\|\s*(.+?)\s*\]\s*$'
+    m = re.search(pattern, reply, re.MULTILINE | re.IGNORECASE)
+    if m:
+        clean = reply[:m.start()].rstrip()
+        return clean, m.group(1).strip(), m.group(2).strip()
+    return reply, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -733,7 +752,15 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         page.update()
 
         def _worker():
-            reply = chat_with_ai(list(conv_history), financial_context, api_key)
+            raw_reply = chat_with_ai(list(conv_history), financial_context, api_key)
+            # Strip any [NOTIFY: title | message] tag before saving/displaying
+            reply, notif_title, notif_msg = _parse_notify_tag(raw_reply)
+            if notif_title and notif_msg:
+                # AI explicitly flagged something — add it directly
+                notif.add("ai", notif_title, notif_msg)
+            else:
+                # Fallback: keyword-scan the reply for financial alerts
+                notif.scan_ai_reply(reply)
             with _sessions_meta_lock:
                 _pending_sessions.discard(sid)
                 callback = _active_callbacks.get(sid)
