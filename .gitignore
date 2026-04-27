@@ -1,6 +1,7 @@
 # Build artifacts
 build/
 dist/
+user_data/
 *.pkg
 *.exe
 *.spec

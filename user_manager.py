@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 USERS_DB = "users.db"
+USER_DATA_DIR = Path("user_data")   # all per-user .db files go here
 DEFAULT_EMOJI = "🧑"
 LAST_ACTIVE_USER_KEY = "last_active_user_id"
 
@@ -30,6 +31,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_users_db() -> None:
+    USER_DATA_DIR.mkdir(exist_ok=True)   # ensure user_data/ folder exists
     conn = _connect()
     conn.execute(
         f"""
@@ -174,7 +176,7 @@ def delete_user(user_id: int) -> None:
 
 
 def get_db_path(user_id: int) -> str:
-    return f"budget_user_{user_id}.db"
+    return str(USER_DATA_DIR / f"budget_user_{user_id}.db")
 
 
 def user_name_exists(name: str) -> bool:
