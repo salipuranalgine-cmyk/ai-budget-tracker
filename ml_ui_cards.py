@@ -73,6 +73,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
+import ml_engine
+
 
 # ── Shared palette (matches your existing dashboard palette) ──────────────────
 _PALETTE = [
@@ -161,6 +163,22 @@ def _section_card(
                     content,
                 ],
             ),
+        ),
+    )
+
+
+def _reliability_badge(percent: int, accent_color: str) -> ft.Control:
+    tone = ft.Colors.GREEN_400 if percent >= 75 else ft.Colors.ORANGE_300 if percent >= 50 else ft.Colors.BLUE_300
+    return ft.Container(
+        padding=ft.Padding(left=10, right=10, top=5, bottom=5),
+        border_radius=999,
+        bgcolor=ft.Colors.with_opacity(0.14, accent_color),
+        border=ft.border.all(1, ft.Colors.with_opacity(0.22, accent_color)),
+        content=ft.Text(
+            f"Reliability {percent}%",
+            size=10,
+            weight=ft.FontWeight.BOLD,
+            color=tone,
         ),
     )
 
@@ -271,6 +289,12 @@ def build_ml_forecast_card(
     If the model hasn't been trained yet (not enough data),
     shows a friendly "not enough data" placeholder instead.
     """
+    forecast_reliability = (
+        int(round(sum(int(item.get("reliability_pct", 0)) for item in forecast_summary) / len(forecast_summary)))
+        if forecast_summary else
+        ml_engine.get_forecast_reliability_pct()
+    )
+
     # ── No model yet ──────────────────────────────────────────────────────────
     if not forecast_summary:
         empty_body = ft.Container(
@@ -287,7 +311,7 @@ def build_ml_forecast_card(
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
                     ft.Text(
-                        "Keep logging expenses for 3+ months\nand the ML model will predict\nyour future spending here.",
+                        "Log some expenses first and this card will\nstart estimating from your current history.\nMore months = more reliable forecasts.",
                         size=11,
                         color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
@@ -297,7 +321,7 @@ def build_ml_forecast_card(
         )
         return _section_card(
             "Next Month Forecast",
-            "ML prediction — needs 3+ months of history",
+            "Live estimate warming up from your current spending history.",
             icon=ft.Icons.AUTO_GRAPH_ROUNDED,
             accent_color="#a78bfa",
             content=empty_body,
@@ -355,6 +379,10 @@ def build_ml_forecast_card(
     body = ft.Column(
         spacing=10,
         controls=[
+            ft.Row(
+                alignment=ft.MainAxisAlignment.START,
+                controls=[_reliability_badge(forecast_reliability, "#a78bfa")],
+            ),
             # Chart
             ft.Container(
                 alignment=ft.Alignment(0, 0),
@@ -385,7 +413,7 @@ def build_ml_forecast_card(
 
     return _section_card(
         "Next Month Forecast",
-        "LinearRegression prediction based on your spending history.",
+        f"Live estimate from your current spending history — reliability {forecast_reliability}%.",
         icon=ft.Icons.AUTO_GRAPH_ROUNDED,
         accent_color="#a78bfa",
         content=body,
@@ -439,6 +467,12 @@ def build_ml_anomaly_card(
     If no anomalies were detected, shows a positive "all looks normal" message.
     If the model isn't trained yet, shows a placeholder.
     """
+    anomaly_reliability = (
+        int(anomalies[0].get("reliability_pct", 0))
+        if anomalies else
+        ml_engine.get_anomaly_reliability_pct()
+    )
+
     # ── Model not ready ───────────────────────────────────────────────────────
     if anomalies is None:
         # detect_anomalies() returns [] when model not ready — this branch
@@ -449,7 +483,6 @@ def build_ml_anomaly_card(
     if not anomalies:
         # Two different messages depending on whether the model is trained
         try:
-            import ml_engine
             model_ready = ml_engine._model_path("anomaly_detector").exists()
         except Exception:
             model_ready = False
@@ -485,7 +518,7 @@ def build_ml_anomaly_card(
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
                     ft.Text(
-                        f"Log at least 30 expense transactions\nand the model will learn what\n'normal' looks like for you.",
+                        "Keep logging expenses and the detector will\nlearn your normal patterns from current data.\nMore history = more reliable alerts.",
                         size=11,
                         color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
@@ -495,7 +528,7 @@ def build_ml_anomaly_card(
 
         return _section_card(
             "Flagged Transactions",
-            "IsolationForest anomaly detection",
+            f"IsolationForest scan warming up — reliability {anomaly_reliability}%.",
             icon=ft.Icons.POLICY_ROUNDED,
             accent_color="#f472b6",
             content=ft.Container(
@@ -568,12 +601,14 @@ def build_ml_anomaly_card(
         spacing=0,
         controls=[
             ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 controls=[
                     ft.Text(
                         f"⚠️ {len(anomalies)} unusual transaction(s) found",
                         size=12,
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
+                    _reliability_badge(anomaly_reliability, "#f472b6"),
                 ],
             ),
             ft.Container(height=8),
@@ -590,7 +625,7 @@ def build_ml_anomaly_card(
 
     return _section_card(
         "Flagged Transactions",
-        "IsolationForest anomaly detection — sorted by suspicion level.",
+        f"IsolationForest scan of your current history — reliability {anomaly_reliability}%.",
         icon=ft.Icons.POLICY_ROUNDED,
         accent_color="#f472b6",
         content=body,

@@ -53,8 +53,8 @@ def _parse_notify_tag(reply: str) -> tuple[str, str | None, str | None]:
 
 _PALETTE = ["#38bdf8", "#818cf8", "#fb923c", "#34d399", "#f472b6",
             "#fbbf24", "#a78bfa", "#22d3ee", "#4ade80", "#f87171"]
-_HOVER_ANIMATION = ft.Animation(180, ft.AnimationCurve.EASE_OUT)
-_SWAP_ANIMATION = ft.Animation(260, ft.AnimationCurve.EASE_IN_OUT_CUBIC)
+_HOVER_ANIMATION = ft.Animation(140, ft.AnimationCurve.EASE_OUT_CUBIC)
+_SWAP_ANIMATION = ft.Animation(180, ft.AnimationCurve.EASE_OUT_CUBIC)
 
 
 def _fig_to_b64(fig) -> str:
@@ -1888,26 +1888,36 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         if surface is None or surface.current is None:
             return
 
+        active_drag = drag_state["active_id"] == module_id
         accent = "#38bdf8" if drop_target else "#7dd3fc"
-        surface.current.scale = ft.Scale(1.012 if hovered or drop_target else 1.0)
+        if drop_target:
+            scale = 1.02
+        elif active_drag:
+            scale = 1.008
+        elif hovered:
+            scale = 1.01
+        else:
+            scale = 1.0
+
+        surface.current.scale = ft.Scale(scale)
         surface.current.border = ft.border.all(
-            1.6 if hovered or drop_target else 1,
-            ft.Colors.with_opacity(0.34 if hovered or drop_target else 0.0, accent),
+            1.8 if drop_target else 1.4 if hovered or active_drag else 1,
+            ft.Colors.with_opacity(0.38 if drop_target else 0.24 if hovered or active_drag else 0.0, accent),
         )
         surface.current.gradient = ft.LinearGradient(
             begin=ft.Alignment(-1, -1),
             end=ft.Alignment(1, 1),
             colors=[
-                ft.Colors.with_opacity(0.14 if hovered or drop_target else 0.0, accent),
-                ft.Colors.with_opacity(0.03 if hovered or drop_target else 0.0, ft.Colors.WHITE),
+                ft.Colors.with_opacity(0.16 if drop_target else 0.10 if hovered or active_drag else 0.0, accent),
+                ft.Colors.with_opacity(0.04 if hovered or drop_target or active_drag else 0.0, ft.Colors.WHITE),
             ],
         )
         surface.current.shadow = [
             ft.BoxShadow(
-                blur_radius=20 if drop_target else 16,
-                spread_radius=0.5 if hovered or drop_target else 0,
-                color=ft.Colors.with_opacity(0.18 if hovered or drop_target else 0.0, accent),
-                offset=ft.Offset(0, 8 if hovered or drop_target else 0),
+                blur_radius=22 if drop_target else 18 if active_drag else 14,
+                spread_radius=0.8 if drop_target else 0.35 if hovered or active_drag else 0,
+                color=ft.Colors.with_opacity(0.20 if drop_target else 0.14 if hovered or active_drag else 0.0, accent),
+                offset=ft.Offset(0, 10 if drop_target else 8 if hovered or active_drag else 0),
             )
         ]
 
@@ -1915,44 +1925,63 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         _refresh_module_surface(module_id, hovered=hovered, drop_target=drop_target)
         page.update()
 
-    async def _animate_module_swap(source_id: str, target_id: str, source_index: int, target_index: int) -> None:
-        source_shell = module_shell_refs.get(source_id)
-        target_shell = module_shell_refs.get(target_id)
-        if source_shell is None or target_shell is None:
-            return
-        if source_shell.current is None or target_shell.current is None:
-            return
-
-        cards_per_row = _dashboard_cards_per_row(page.width)
-        source_row, source_col = divmod(source_index, cards_per_row)
-        target_row, target_col = divmod(target_index, cards_per_row)
-        source_offset = ft.Offset(source_col - target_col, source_row - target_row)
-        target_offset = ft.Offset(target_col - source_col, target_row - source_row)
-
-        source_shell.current.offset = source_offset
-        target_shell.current.offset = target_offset
-        source_shell.current.scale = ft.Scale(1.018)
-        target_shell.current.scale = ft.Scale(1.018)
-        page.update()
-        await asyncio.sleep(0.02)
-
-        source_shell.current.offset = ft.Offset(0, 0)
-        target_shell.current.offset = ft.Offset(0, 0)
-        source_shell.current.scale = ft.Scale(1.0)
-        target_shell.current.scale = ft.Scale(1.0)
-        page.update()
-
     def _drag_handle(module_id: str) -> ft.Control:
         return ft.Container(
             width=30,
             height=30,
             border_radius=15,
-            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
+            bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.ON_SURFACE),
             alignment=ft.Alignment(0, 0),
             content=ft.Icon(
                 ft.Icons.DRAG_INDICATOR,
                 size=16,
                 color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+            ),
+        )
+
+    def _drag_feedback_preview(module_id: str, feedback_width: int) -> ft.Control:
+        ghost_width = min(170, max(136, feedback_width - 220))
+        left = max(0, feedback_width - ghost_width - 10)
+        label = module_id.replace("_", " ").title()
+        return ft.Container(
+            width=feedback_width,
+            height=52,
+            content=ft.Stack(
+                width=feedback_width,
+                height=52,
+                controls=[
+                    ft.Container(
+                        left=left,
+                        top=0,
+                        width=ghost_width,
+                        height=38,
+                        border_radius=19,
+                        padding=ft.Padding(left=12, right=12, top=0, bottom=0),
+                        bgcolor=ft.Colors.with_opacity(0.96, "#082f49"),
+                        border=ft.border.all(1, ft.Colors.with_opacity(0.28, "#38bdf8")),
+                        shadow=ft.BoxShadow(
+                            blur_radius=20,
+                            spread_radius=0.5,
+                            color=ft.Colors.with_opacity(0.22, "#38bdf8"),
+                            offset=ft.Offset(0, 10),
+                        ),
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            spacing=8,
+                            controls=[
+                                ft.Icon(ft.Icons.DRAG_INDICATOR, size=15, color="#7dd3fc"),
+                                ft.Text(
+                                    label,
+                                    size=11,
+                                    weight=ft.FontWeight.BOLD,
+                                    color=ft.Colors.WHITE,
+                                    max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                ),
+                            ],
+                        ),
+                    )
+                ],
             ),
         )
 
@@ -1975,10 +2004,9 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         module_grid.controls = [dashboard_modules[module_id] for module_id in module_order]
         _persist_dashboard_order()
         drag_state["active_id"] = None
-        _refresh_module_surface(source_id)
-        _refresh_module_surface(target_id)
+        for current_module_id in module_order:
+            _refresh_module_surface(current_module_id)
         page.update()
-        page.run_task(_animate_module_swap, source_id, target_id, source_index, target_index)
 
     def _on_drag_start(module_id: str) -> None:
         drag_state["active_id"] = module_id
@@ -1986,7 +2014,9 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     def _on_drag_complete(module_id: str) -> None:
         drag_state["active_id"] = None
-        _queue_surface_refresh(module_id)
+        for current_module_id in module_order:
+            _refresh_module_surface(current_module_id)
+        page.update()
 
     def _on_module_hover(e, module_id: str) -> None:
         if drag_state["active_id"] == module_id:
@@ -2007,7 +2037,6 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         module_shell_refs[module_id] = shell_ref
         module_surface_refs[module_id] = surface_ref
         live_content = builder(_drag_handle(module_id))
-        feedback_content = builder(None)
         return ft.Container(
             ref=shell_ref,
             col=col_spec,
@@ -2034,23 +2063,28 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                         on_drag_start=lambda e, module=module_id: _on_drag_start(module),
                         on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
                         content=live_content,
-                        content_feedback=ft.Container(
-                            width=feedback_width,
-                            padding=8,
-                            scale=ft.Scale(1.015),
-                            shadow=ft.BoxShadow(
-                                blur_radius=24,
-                                spread_radius=1,
-                                color=ft.Colors.with_opacity(0.18, "#38bdf8"),
-                                offset=ft.Offset(0, 12),
-                            ),
-                            content=feedback_content,
-                        ),
+                        content_feedback=_drag_feedback_preview(module_id, feedback_width),
                         content_when_dragging=ft.Container(
-                            border_radius=16,
-                            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
-                            border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)),
+                            border_radius=20,
+                            gradient=ft.LinearGradient(
+                                begin=ft.Alignment(-1, -1),
+                                end=ft.Alignment(1, 1),
+                                colors=[
+                                    ft.Colors.with_opacity(0.07, "#38bdf8"),
+                                    ft.Colors.with_opacity(0.03, ft.Colors.WHITE),
+                                ],
+                            ),
+                            border=ft.border.all(1.4, ft.Colors.with_opacity(0.18, "#38bdf8")),
                             height=_CARD_CONTENT_HEIGHT + 74,
+                            content=ft.Container(
+                                alignment=ft.Alignment(0, 0),
+                                content=ft.Text(
+                                    "Drop card here",
+                                    size=11,
+                                    weight=ft.FontWeight.W_600,
+                                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                                ),
+                            ),
                         ),
                     ),
                 ),
