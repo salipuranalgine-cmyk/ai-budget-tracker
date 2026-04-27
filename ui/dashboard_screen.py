@@ -227,7 +227,7 @@ def _build_area_line_chart(
         spine.set_visible(False)
 
     ax.set_title("Daily Spending — Last 30 Days", color=theme["text"], fontsize=11,
-                 fontweight="bold", pad=10)
+                 fontweight="bold", pad=10, x=0.45)
     fig.tight_layout(pad=1.0)
 
     b64 = _fig_to_b64(fig)
@@ -283,9 +283,9 @@ def _build_bar_chart(
         spine.set_visible(False)
 
     ax.set_title("Top Spending Categories", color=theme["text"], fontsize=11,
-                 fontweight="bold", pad=10)
+                 fontweight="bold", pad=10, x=0.35)
 
-    fig.tight_layout(pad=1.2)
+    fig.subplots_adjust(left=0.20, right=0.88, top=0.84, bottom=0.10)
     b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
@@ -1160,7 +1160,7 @@ def _build_cashflow_chart(
         spine.set_visible(False)
 
     ax.legend(loc="upper left", frameon=False, fontsize=7.5, labelcolor=theme["text"])
-    ax.set_title("Income vs Spend", color=theme["text"], fontsize=11, fontweight="bold", pad=10)
+    ax.set_title("Income vs Spend", color=theme["text"], fontsize=11, fontweight="bold", pad=10, x=0.45)
 
     fig.tight_layout(pad=1.1)
     b64 = _fig_to_b64(fig)
@@ -1199,7 +1199,7 @@ def _build_weekday_chart(
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title("Spending Rhythm by Weekday", color=theme["text"], fontsize=11, fontweight="bold", pad=10)
+    ax.set_title("Spending Rhythm by Weekday", color=theme["text"], fontsize=11, fontweight="bold", pad=10, x=0.45)
 
     fig.tight_layout(pad=1.0)
     b64 = _fig_to_b64(fig)

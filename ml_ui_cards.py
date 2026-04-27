@@ -304,9 +304,9 @@ def _build_forecast_chart(
 
     ax.set_title(
         "Predicted Spending — Next Month",
-        color=theme["text"], fontsize=11, fontweight="bold", pad=10,
+        color=theme["text"], fontsize=11, fontweight="bold", pad=10, x=0.35,
     )
-    fig.tight_layout(pad=1.2)
+    fig.subplots_adjust(left=0.22, right=0.86, top=0.84, bottom=0.10)
 
     b64 = _fig_to_b64(fig)
     plt.close(fig)
