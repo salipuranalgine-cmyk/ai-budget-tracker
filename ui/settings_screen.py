@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import flet as ft
 
@@ -110,7 +111,7 @@ def _status_row(label: str, value: str, value_color=None) -> ft.Control:
             ft.Text(
                 value, size=12,
                 weight=ft.FontWeight.W_600,
-                color=value_color or ft.Colors.WHITE,
+                color=value_color or ft.Colors.ON_SURFACE,
             ),
         ],
     )
@@ -123,7 +124,10 @@ def _status_row(label: str, value: str, value_color=None) -> ft.Control:
 # lets them retrain manually.
 # ---------------------------------------------------------------------------
 
-def _show_ml_status_dialog(page: ft.Page) -> None:
+def _show_ml_status_dialog(
+    page: ft.Page,
+    on_status_changed: Callable[[], None] | None = None,
+) -> None:
     """
     Opens a dialog showing the full status of the scikit-learn ML engine.
     Think of it like a health dashboard for the ML layer.
@@ -181,7 +185,7 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
             ft.Container(
                 padding=12,
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                 content=ft.Column(spacing=12, controls=[
 
                     # Anomaly Detector
@@ -230,7 +234,7 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
             ft.Container(
                 padding=12,
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                 content=ft.Column(spacing=8, controls=[
                     ft.Text("Your Data Snapshot", size=12,
                             weight=ft.FontWeight.BOLD,
@@ -310,7 +314,7 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
             ft.Container(
                 padding=12,
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                 content=ft.Column(spacing=8, controls=[
                     ft.Text("Retrain Schedule", size=12,
                             weight=ft.FontWeight.BOLD,
@@ -331,7 +335,7 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
             ft.Container(
                 padding=12,
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                 content=ft.Column(spacing=8, controls=[
                     ft.Row(spacing=6, controls=[
                         ft.Text("🧠", size=14),
@@ -375,6 +379,8 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
         retrain_btn.disabled = False
         retrain_btn.text = "Retrain Now"
         _build_status_content()   # refresh the status numbers
+        if on_status_changed is not None:
+            on_status_changed()
         page.update()
 
     retrain_btn.on_click = _do_retrain
@@ -412,12 +418,14 @@ def _show_ml_status_dialog(page: ft.Page) -> None:
                 controls=[
                     ft.Container(expand=True, content=status_col),
                     ft.Divider(height=1),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ft.Column(
+                        spacing=8,
                         controls=[
                             retrain_status_text,
-                            retrain_btn,
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.END,
+                                controls=[retrain_btn],
+                            ),
                         ],
                     ),
                 ],
@@ -666,6 +674,7 @@ def settings_screen(page: ft.Page) -> ft.Control:
         ml_engine.set_retrain_schedule(schedule)
         ml_schedule_status.value = f"Saved. {ML_SCHEDULE_LABELS.get(schedule, schedule)}"
         ml_schedule_status.color = ft.Colors.GREEN_400
+        refresh_ml_status_ui()
         toast("ML retrain schedule saved.")
         page.update()
 
@@ -699,6 +708,47 @@ def settings_screen(page: ft.Page) -> ft.Control:
     both_ready = ml_status_summary["anomaly_model_ready"] and ml_status_summary["forecast_model_ready"]
     ml_badge_text = "Both models ready" if both_ready else "Not trained yet"
     ml_badge_color = ft.Colors.GREEN_400 if both_ready else ft.Colors.ORANGE_400
+    ml_badge_label = ft.Text(ml_badge_text, size=10, color=ml_badge_color)
+    ml_badge_chip = ft.Container(
+        padding=ft.Padding(6, 2, 6, 2),
+        border_radius=8,
+        bgcolor=ft.Colors.with_opacity(0.18, ml_badge_color),
+        content=ml_badge_label,
+    )
+    ml_last_retrain_value = ft.Text(
+        ml_status_summary["last_retrain"],
+        size=12,
+        weight=ft.FontWeight.BOLD,
+        color=ft.Colors.ON_SURFACE,
+    )
+    ml_next_retrain_value = ft.Text(
+        ml_status_summary["next_retrain"],
+        size=12,
+        weight=ft.FontWeight.BOLD,
+        color=ft.Colors.GREEN_300 if ml_status_summary["next_retrain"] == "Due now" else ft.Colors.ON_SURFACE,
+    )
+    ml_transaction_count_value = ft.Text(
+        str(ml_status_summary["transaction_count"]),
+        size=12,
+        weight=ft.FontWeight.BOLD,
+        color=ft.Colors.ON_SURFACE,
+    )
+
+    def refresh_ml_status_ui() -> None:
+        status = ml_engine.get_ml_status()
+        ready = status["anomaly_model_ready"] and status["forecast_model_ready"]
+        badge_text = "Both models ready" if ready else "Not trained yet"
+        badge_color = ft.Colors.GREEN_400 if ready else ft.Colors.ORANGE_400
+
+        ml_badge_label.value = badge_text
+        ml_badge_label.color = badge_color
+        ml_badge_chip.bgcolor = ft.Colors.with_opacity(0.18, badge_color)
+        ml_last_retrain_value.value = status["last_retrain"]
+        ml_next_retrain_value.value = status["next_retrain"]
+        ml_next_retrain_value.color = (
+            ft.Colors.GREEN_300 if status["next_retrain"] == "Due now" else ft.Colors.ON_SURFACE
+        )
+        ml_transaction_count_value.value = str(status["transaction_count"])
 
     return ft.Column(
         expand=True,
@@ -860,23 +910,14 @@ def settings_screen(page: ft.Page) -> ft.Control:
                                                     color=ft.Colors.PURPLE_300),
                                             ft.Text("ML Smart Analysis",
                                                     weight=ft.FontWeight.BOLD, size=16),
-                                            ft.Container(
-                                                padding=ft.Padding(6, 2, 6, 2),
-                                                border_radius=8,
-                                                bgcolor=ft.Colors.with_opacity(
-                                                    0.18, ml_badge_color),
-                                                content=ft.Text(
-                                                    ml_badge_text, size=10,
-                                                    color=ml_badge_color,
-                                                ),
-                                            ),
+                                            ml_badge_chip,
                                         ],
                                     ),
                                     # "View ML Status" button — your requested button
                                     ft.OutlinedButton(
                                         "View ML Status",
                                         icon=ft.Icons.MONITOR_HEART_ROUNDED,
-                                        on_click=lambda _: _show_ml_status_dialog(page),
+                                        on_click=lambda _: _show_ml_status_dialog(page, refresh_ml_status_ui),
                                         style=ft.ButtonStyle(
                                             side=ft.BorderSide(
                                                 1, ft.Colors.with_opacity(0.35, ft.Colors.PURPLE_300)
@@ -899,7 +940,8 @@ def settings_screen(page: ft.Page) -> ft.Control:
                             ft.Row(
                                 spacing=10,
                                 controls=[
-                                    ft.Expanded(
+                                    ft.Container(
+                                        expand=True,
                                         content=_info_card(
                                             ft.Icons.POLICY_ROUNDED,
                                             ft.Colors.PINK_300,
@@ -909,7 +951,8 @@ def settings_screen(page: ft.Page) -> ft.Control:
                                             badge_color=ft.Colors.PINK_300,
                                         ),
                                     ),
-                                    ft.Expanded(
+                                    ft.Container(
+                                        expand=True,
                                         content=_info_card(
                                             ft.Icons.AUTO_GRAPH_ROUNDED,
                                             ft.Colors.PURPLE_300,
@@ -970,36 +1013,33 @@ def settings_screen(page: ft.Page) -> ft.Control:
                                         expand=True,
                                         padding=ft.Padding(10, 8, 10, 8),
                                         border_radius=8,
-                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                                         content=ft.Column(spacing=3, controls=[
                                             ft.Text("Last retrain", size=10,
                                                     color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
-                                            ft.Text(ml_status_summary["last_retrain"],
-                                                    size=12, weight=ft.FontWeight.BOLD),
+                                            ml_last_retrain_value,
                                         ]),
                                     ),
                                     ft.Container(
                                         expand=True,
                                         padding=ft.Padding(10, 8, 10, 8),
                                         border_radius=8,
-                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                                         content=ft.Column(spacing=3, controls=[
                                             ft.Text("Next retrain", size=10,
                                                     color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
-                                            ft.Text(ml_status_summary["next_retrain"],
-                                                    size=12, weight=ft.FontWeight.BOLD),
+                                            ml_next_retrain_value,
                                         ]),
                                     ),
                                     ft.Container(
                                         expand=True,
                                         padding=ft.Padding(10, 8, 10, 8),
                                         border_radius=8,
-                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
                                         content=ft.Column(spacing=3, controls=[
                                             ft.Text("Transactions", size=10,
                                                     color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
-                                            ft.Text(str(ml_status_summary["transaction_count"]),
-                                                    size=12, weight=ft.FontWeight.BOLD),
+                                            ml_transaction_count_value,
                                         ]),
                                     ),
                                 ],
