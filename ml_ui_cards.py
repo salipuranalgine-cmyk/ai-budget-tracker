@@ -183,6 +183,15 @@ def _reliability_badge(percent: int, accent_color: str) -> ft.Control:
     )
 
 
+def _merge_header_actions(primary: ft.Control | None, secondary: ft.Control | None) -> ft.Control | None:
+    actions = [action for action in [secondary, primary] if action is not None]
+    if not actions:
+        return None
+    if len(actions) == 1:
+        return actions[0]
+    return ft.Row(spacing=8, tight=True, controls=actions)
+
+
 # =============================================================================
 # CARD 1: SPENDING FORECAST
 # =============================================================================
@@ -278,6 +287,8 @@ def build_ml_forecast_card(
     peso_fn,
     *,
     header_action: ft.Control | None = None,
+    expanded: bool = False,
+    content_height: int = _CARD_CONTENT_HEIGHT,
 ) -> ft.Control:
     """
     Build the "Next Month Forecast" section card for the dashboard.
@@ -294,11 +305,15 @@ def build_ml_forecast_card(
         if forecast_summary else
         ml_engine.get_forecast_reliability_pct()
     )
+    header_content = _merge_header_actions(
+        header_action,
+        _reliability_badge(forecast_reliability, "#a78bfa") if forecast_reliability > 0 else None,
+    )
 
     # ── No model yet ──────────────────────────────────────────────────────────
     if not forecast_summary:
         empty_body = ft.Container(
-            height=_CARD_CONTENT_HEIGHT,
+            height=content_height,
             alignment=ft.Alignment(0, 0),
             content=ft.Column(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -325,7 +340,7 @@ def build_ml_forecast_card(
             icon=ft.Icons.AUTO_GRAPH_ROUNDED,
             accent_color="#a78bfa",
             content=empty_body,
-            header_action=header_action,
+            header_action=header_content,
         )
 
     # ── Chart ─────────────────────────────────────────────────────────────────
@@ -378,38 +393,17 @@ def build_ml_forecast_card(
 
     body = ft.Column(
         spacing=10,
-        scroll=ft.ScrollMode.AUTO,
-        height=_CARD_CONTENT_HEIGHT,
+        height=content_height,
         controls=[
-            ft.Row(
-                alignment=ft.MainAxisAlignment.START,
-                controls=[_reliability_badge(forecast_reliability, "#a78bfa")],
-            ),
-            # Chart
             ft.Container(
                 alignment=ft.Alignment(0, 0),
+                expand=True,
                 content=ft.Image(
                     src=f"data:image/png;base64,{chart_b64}",
                     fit=ft.BoxFit.FIT_WIDTH,
                     expand=True,
                 ) if chart_b64 else ft.Container(),
             ),
-            # Table header
-            ft.Row(controls=[
-                ft.Container(expand=5, content=ft.Text(
-                    "Category", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text(
-                    "Predicted", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-                ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text(
-                    "Trend", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-            ]),
-            ft.Column(spacing=6, controls=table_rows),
         ],
     )
 
@@ -419,7 +413,104 @@ def build_ml_forecast_card(
         icon=ft.Icons.AUTO_GRAPH_ROUNDED,
         accent_color="#a78bfa",
         content=body,
-        header_action=header_action,
+        header_action=header_content,
+    )
+
+
+def build_ml_forecast_expanded_card(
+    forecast_summary: list[dict],
+    peso_fn,
+) -> ft.Control:
+    forecast_reliability = (
+        int(round(sum(int(item.get("reliability_pct", 0)) for item in forecast_summary) / len(forecast_summary)))
+        if forecast_summary else
+        ml_engine.get_forecast_reliability_pct()
+    )
+    header_content = _reliability_badge(forecast_reliability, "#a78bfa") if forecast_reliability > 0 else None
+
+    if not forecast_summary:
+        return build_ml_forecast_card(forecast_summary, peso_fn)
+
+    chart_b64 = _build_forecast_chart(forecast_summary)
+    trend_icon = {"up": "â†‘", "down": "â†“", "stable": "â†’"}
+    trend_color = {
+        "up": ft.Colors.RED_300,
+        "down": ft.Colors.GREEN_300,
+        "stable": ft.Colors.BLUE_300,
+    }
+    table_rows: list[ft.Control] = []
+    for item in forecast_summary[:8]:
+        trend = item["trend"]
+        table_rows.append(
+            ft.Row(
+                controls=[
+                    ft.Container(
+                        expand=5,
+                        content=ft.Text(
+                            item["category"], size=11,
+                            weight=ft.FontWeight.W_500,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ),
+                    ft.Container(
+                        expand=3,
+                        alignment=ft.Alignment(1, 0),
+                        content=ft.Text(
+                            peso_fn(item["predicted_amount"]),
+                            size=11, weight=ft.FontWeight.W_600,
+                        ),
+                    ),
+                    ft.Container(
+                        expand=2,
+                        alignment=ft.Alignment(1, 0),
+                        content=ft.Text(
+                            trend_icon.get(trend, "â†’"),
+                            size=13, weight=ft.FontWeight.BOLD,
+                            color=trend_color.get(trend, ft.Colors.BLUE_300),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    return _section_card(
+        "Next Month Forecast",
+        f"Live estimate from your current spending history â€” reliability {forecast_reliability}%.",
+        icon=ft.Icons.AUTO_GRAPH_ROUNDED,
+        accent_color="#a78bfa",
+        header_action=header_content,
+        content=ft.Column(
+            spacing=10,
+            expand=True,
+            controls=[
+                ft.Container(
+                    alignment=ft.Alignment(0, 0),
+                    expand=True,
+                    content=ft.Image(
+                        src=f"data:image/png;base64,{chart_b64}",
+                        fit=ft.BoxFit.FIT_WIDTH,
+                        expand=True,
+                    ) if chart_b64 else ft.Container(),
+                ),
+                ft.Divider(height=1, color=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE)),
+                ft.Row(controls=[
+                    ft.Container(expand=5, content=ft.Text(
+                        "Category", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text(
+                        "Predicted", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                    ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text(
+                        "Trend", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                ]),
+                ft.Column(spacing=6, controls=table_rows, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+        ),
     )
 
 
@@ -453,6 +544,7 @@ def build_ml_anomaly_card(
     peso_fn,
     *,
     header_action: ft.Control | None = None,
+    content_height: int = _CARD_CONTENT_HEIGHT,
 ) -> ft.Control:
     """
     Build the "Flagged Transactions" section card for the dashboard.
@@ -534,7 +626,7 @@ def build_ml_anomaly_card(
             icon=ft.Icons.POLICY_ROUNDED,
             accent_color="#f472b6",
             content=ft.Container(
-                height=_CARD_CONTENT_HEIGHT,
+                height=content_height,
                 alignment=ft.Alignment(0, 0),
                 content=body_content,
             ),
@@ -601,6 +693,7 @@ def build_ml_anomaly_card(
 
     body = ft.Column(
         spacing=0,
+        height=content_height,
         controls=[
             ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -619,7 +712,7 @@ def build_ml_anomaly_card(
             ft.Column(
                 spacing=6,
                 scroll=ft.ScrollMode.AUTO,
-                height=_CARD_CONTENT_HEIGHT - 44,
+                height=max(120, content_height - 72),
                 controls=table_rows,
             ),
         ],

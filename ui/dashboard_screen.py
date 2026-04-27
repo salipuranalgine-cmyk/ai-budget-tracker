@@ -1043,6 +1043,25 @@ def _section_card(
     )
 
 
+def _content_surface(
+    accent_color: str,
+    *,
+    content: ft.Control,
+    height: int | None = None,
+    padding: ft.Padding | None = None,
+) -> ft.Control:
+    return ft.Container(
+        height=height if height is not None else _CARD_CONTENT_HEIGHT,
+        padding=padding or ft.Padding(left=8, right=8, top=8, bottom=8),
+        alignment=ft.Alignment(0, 0),
+        border_radius=16,
+        clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+        border=ft.border.all(1, ft.Colors.with_opacity(0.08, accent_color)),
+        content=content,
+    )
+
+
 def _build_cashflow_chart(monthly_rows: list[tuple[str, float, float]]) -> str | None:
     if not monthly_rows:
         return None
@@ -1134,15 +1153,11 @@ def _chart_card(
         content=(
             ft.Container(
                 height=image_height,
-                padding=ft.Padding(left=6, right=6, top=6, bottom=6),
                 alignment=ft.Alignment(0, 0),
-                border_radius=16,
                 clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
-                border=ft.border.all(1, ft.Colors.with_opacity(0.08, accent_color)),
                 content=ft.Image(
                     src=f"data:image/png;base64,{b64}",
-                    fit=ft.BoxFit.FILL,
+                    fit=ft.BoxFit.FIT_WIDTH,
                     expand=True,
                 ),
             )
@@ -1175,13 +1190,7 @@ _DEFAULT_DASHBOARD_MODULE_ORDER = [
 
 
 def _dashboard_content_height(viewport_width: float | None) -> int:
-    width = viewport_width or 0
-    if width >= 1750:
-        return 340
-    if width >= 1450:
-        return 312
-    if width >= 1200:
-        return 286
+    # Match the ML forecast card footprint so dashboard modules feel uniform.
     return 260
 
 
@@ -1215,14 +1224,16 @@ def _leaderboard_card(
     peso_fn,
     *,
     header_action: ft.Control | None = None,
+    content_height: int | None = None,
 ) -> ft.Control:
+    body_height = content_height or _CARD_CONTENT_HEIGHT
     rows = sorted(expense_map.items(), key=lambda item: item[1], reverse=True)
     if not rows:
         body = _empty_dashboard_state(
             "🏆",
             "No category rankings yet",
             "Add expenses and this table will rank your top spending categories here.",
-            height=_CARD_CONTENT_HEIGHT,
+            height=body_height,
         )
     else:
         header = ft.Row(
@@ -1251,18 +1262,22 @@ def _leaderboard_card(
                     ),
                 )
             )
-        body = ft.Column(
-            spacing=0,
-            controls=[
-                header,
-                ft.Container(height=8),
-                ft.Column(
-                    spacing=8,
-                    scroll=ft.ScrollMode.AUTO,
-                    height=_CARD_CONTENT_HEIGHT - 28,
-                    controls=table_rows,
-                ),
-            ],
+        body = ft.Container(
+            height=body_height,
+            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+            content=ft.Column(
+                spacing=0,
+                controls=[
+                    header,
+                    ft.Container(height=8),
+                    ft.Column(
+                        spacing=8,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=max(120, body_height - 28),
+                        controls=table_rows,
+                    ),
+                ],
+            ),
         )
 
     return _section_card(
@@ -1280,13 +1295,15 @@ def _cashflow_table_card(
     peso_fn,
     *,
     header_action: ft.Control | None = None,
+    content_height: int | None = None,
 ) -> ft.Control:
+    body_height = content_height or _CARD_CONTENT_HEIGHT
     if not monthly_rows:
         body = _empty_dashboard_state(
             "🧾",
             "No cashflow history yet",
             "Log income and expenses across a few weeks to compare your monthly cashflow here.",
-            height=_CARD_CONTENT_HEIGHT,
+            height=body_height,
         )
     else:
         header = ft.Row(
@@ -1315,18 +1332,22 @@ def _cashflow_table_card(
                     ),
                 )
             )
-        body = ft.Column(
-            spacing=0,
-            controls=[
-                header,
-                ft.Container(height=8),
-                ft.Column(
-                    spacing=8,
-                    scroll=ft.ScrollMode.AUTO,
-                    height=_CARD_CONTENT_HEIGHT - 28,
-                    controls=data_rows,
-                ),
-            ],
+        body = ft.Container(
+            height=body_height,
+            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+            content=ft.Column(
+                spacing=0,
+                controls=[
+                    header,
+                    ft.Container(height=8),
+                    ft.Column(
+                        spacing=8,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=max(120, body_height - 28),
+                        controls=data_rows,
+                    ),
+                ],
+            ),
         )
 
     return _section_card(
@@ -1985,6 +2006,73 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             ),
         )
 
+    def _drag_header_overlay(module_id: str, feedback_width: int) -> ft.Control:
+        return ft.Container(
+            left=0,
+            right=0,
+            top=0,
+            height=72,
+            content=ft.Draggable(
+                group="dashboard-module",
+                data=module_id,
+                on_drag_start=lambda e, module=module_id: _on_drag_start(module),
+                on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
+                content=ft.Container(
+                    expand=True,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                ),
+                content_feedback=_drag_feedback_preview(module_id, feedback_width),
+                content_when_dragging=ft.Container(
+                    expand=True,
+                    bgcolor=ft.Colors.TRANSPARENT,
+                ),
+            ),
+        )
+
+    def _expanded_dialog_size() -> tuple[int, int, int]:
+        page_width = page.width or 1100
+        page_height = page.height or 760
+        dialog_width = int(min(1040, max(680, page_width * 0.82)))
+        dialog_height = int(min(720, max(520, page_height * 0.78)))
+        content_height = max(360, dialog_height - 118)
+        return dialog_width, dialog_height, content_height
+
+    def _open_expanded_module(module_id: str) -> None:
+        builder = expanded_dashboard_modules.get(module_id)
+        if builder is None:
+            return
+
+        dialog_width, dialog_height, _ = _expanded_dialog_size()
+        title = module_id.replace("_", " ").title()
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Text(title, size=15, weight=ft.FontWeight.BOLD),
+                    ft.IconButton(
+                        icon=ft.Icons.CLOSE,
+                        icon_size=20,
+                        tooltip="Close expanded view",
+                        on_click=lambda _: _close_expanded_module(dlg),
+                    ),
+                ],
+            ),
+            content=ft.Container(
+                width=dialog_width,
+                height=dialog_height,
+                content=builder(),
+            ),
+            actions=[],
+        )
+        page.overlay.append(dlg)
+        dlg.open = True
+        page.update()
+
+    def _close_expanded_module(dlg: ft.AlertDialog) -> None:
+        dlg.open = False
+        page.update()
+
     def _on_module_drop(e, target_id: str) -> None:
         source_control = getattr(e, "src", None)
         if source_control is None and getattr(e, "src_id", None):
@@ -2037,6 +2125,10 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         module_shell_refs[module_id] = shell_ref
         module_surface_refs[module_id] = surface_ref
         live_content = builder(_drag_handle(module_id))
+        clickable_content = ft.Container(
+            content=live_content,
+            on_click=lambda e, module=module_id: _open_expanded_module(module),
+        )
         return ft.Container(
             ref=shell_ref,
             col=col_spec,
@@ -2057,39 +2149,139 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                     on_will_accept=lambda e, target=module_id: _on_module_will_accept(e, target),
                     on_leave=lambda e, target=module_id: _on_module_leave(target),
                     on_accept=lambda e, target=module_id: _on_module_drop(e, target),
-                    content=ft.Draggable(
-                        group="dashboard-module",
-                        data=module_id,
-                        on_drag_start=lambda e, module=module_id: _on_drag_start(module),
-                        on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
-                        content=live_content,
-                        content_feedback=_drag_feedback_preview(module_id, feedback_width),
-                        content_when_dragging=ft.Container(
-                            border_radius=20,
-                            gradient=ft.LinearGradient(
-                                begin=ft.Alignment(-1, -1),
-                                end=ft.Alignment(1, 1),
-                                colors=[
-                                    ft.Colors.with_opacity(0.07, "#38bdf8"),
-                                    ft.Colors.with_opacity(0.03, ft.Colors.WHITE),
-                                ],
-                            ),
-                            border=ft.border.all(1.4, ft.Colors.with_opacity(0.18, "#38bdf8")),
-                            height=_CARD_CONTENT_HEIGHT + 74,
-                            content=ft.Container(
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Text(
-                                    "Drop card here",
-                                    size=11,
-                                    weight=ft.FontWeight.W_600,
-                                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                                ),
-                            ),
-                        ),
+                    content=ft.Stack(
+                        controls=[
+                            clickable_content,
+                            _drag_header_overlay(module_id, feedback_width),
+                        ],
                     ),
                 ),
             ),
         )
+
+    expanded_dashboard_modules = {
+        "daily_trend": lambda: _chart_card(
+            "Daily Spending Trend",
+            "Your last 30 days of expense activity.",
+            icon=ft.Icons.SHOW_CHART_ROUNDED,
+            accent_color="#38bdf8",
+            b64=line_b64,
+            placeholder="Log expenses and your last 30 days of spending will chart here.",
+            empty_title="No trend data yet",
+            image_height=_expanded_dialog_size()[2],
+        ),
+        "cashflow_pulse": lambda: _chart_card(
+            "Cashflow Pulse",
+            "Income, spending, and net movement across recent months.",
+            icon=ft.Icons.INSIGHTS_ROUNDED,
+            accent_color="#22c55e",
+            b64=cashflow_b64,
+            placeholder="Add income and expenses to compare your monthly cashflow here.",
+            empty_title="No cashflow history yet",
+            image_height=_expanded_dialog_size()[2],
+        ),
+        "category_breakdown": lambda: _chart_card(
+            "Spending by Category",
+            "A distribution view of where the month is going.",
+            icon=ft.Icons.DONUT_LARGE_ROUNDED,
+            accent_color="#8b5cf6",
+            b64=donut_b64,
+            placeholder="Add expenses and this chart will show where your money goes.",
+            empty_title="No category data yet",
+            image_height=_expanded_dialog_size()[2],
+        ),
+        "weekday_rhythm": lambda: _chart_card(
+            "Weekday Rhythm",
+            "See which days tend to attract the most spending.",
+            icon=ft.Icons.CALENDAR_VIEW_WEEK_ROUNDED,
+            accent_color="#f59e0b",
+            b64=weekday_b64,
+            placeholder="Keep logging expenses and this chart will reveal your busiest spending days.",
+            empty_title="No weekday pattern yet",
+            image_height=_expanded_dialog_size()[2],
+        ),
+        "top_categories": lambda: _chart_card(
+            "Top Categories",
+            "Your highest-spend categories at a glance.",
+            icon=ft.Icons.BAR_CHART_ROUNDED,
+            accent_color="#06b6d4",
+            b64=bar_b64,
+            placeholder="Add expenses and this chart will compare your highest-spend categories.",
+            empty_title="No top categories yet",
+            image_height=_expanded_dialog_size()[2],
+        ),
+        "leaderboard": lambda: _leaderboard_card(
+            expense_map,
+            month_total,
+            peso,
+            content_height=_expanded_dialog_size()[2],
+        ),
+        "budget_progress": lambda: _section_card(
+            "Budget Progress",
+            "Track how each category is pacing against its current limit.",
+            icon=ft.Icons.MY_LOCATION,
+            accent_color="#f59e0b",
+            content=(
+                ft.Container(
+                    height=_expanded_dialog_size()[2],
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                    content=ft.Column(
+                        spacing=12,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_expanded_dialog_size()[2],
+                        controls=budget_section_controls,
+                    ),
+                )
+                if budget_section_controls else
+                _empty_dashboard_state(
+                    "ðŸŽ¯",
+                    "No budgets yet",
+                    "Create a budget limit in the Budgets tab and your category progress will appear here.",
+                    height=_expanded_dialog_size()[2],
+                )
+            ),
+        ),
+        "upcoming_bills": lambda: _section_card(
+            "Upcoming Bills",
+            "Recurring income and bills scheduled next.",
+            icon=ft.Icons.CALENDAR_MONTH_ROUNDED,
+            accent_color="#0ea5e9",
+            content=(
+                ft.Container(
+                    height=_expanded_dialog_size()[2],
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                    content=ft.Column(
+                        spacing=10,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_expanded_dialog_size()[2],
+                        controls=upcoming_controls,
+                    ),
+                )
+                if upcoming_controls else
+                _empty_dashboard_state(
+                    "ðŸ“…",
+                    "No recurring items yet",
+                    "Add a recurring bill or income and upcoming due dates will show here.",
+                    height=_expanded_dialog_size()[2],
+                )
+            ),
+        ),
+        "ml_forecast": lambda: build_ml_forecast_card(
+            ml_forecast,
+            peso,
+            content_height=_expanded_dialog_size()[2],
+        ),
+        "ml_anomalies": lambda: build_ml_anomaly_card(
+            ml_anomalies,
+            peso,
+            content_height=_expanded_dialog_size()[2],
+        ),
+        "cashflow_table": lambda: _cashflow_table_card(
+            monthly_cashflow,
+            peso,
+            content_height=_expanded_dialog_size()[2],
+        ),
+    }
 
     dashboard_modules = {
         "daily_trend": _wrap_dashboard_module(
@@ -2187,11 +2379,14 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 accent_color="#f59e0b",
                 header_action=header_action,
                 content=(
-                    ft.Column(
-                        spacing=12,
-                        scroll=ft.ScrollMode.AUTO,
-                        height=_CARD_CONTENT_HEIGHT,
-                        controls=budget_section_controls,
+                    _content_surface(
+                        "#f59e0b",
+                        content=ft.Column(
+                            spacing=12,
+                            scroll=ft.ScrollMode.AUTO,
+                            height=_CARD_CONTENT_HEIGHT - 16,
+                            controls=budget_section_controls,
+                        ),
                     )
                     if budget_section_controls else
                     _empty_dashboard_state(
@@ -2213,11 +2408,14 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 accent_color="#0ea5e9",
                 header_action=header_action,
                 content=(
-                    ft.Column(
-                        spacing=10,
-                        scroll=ft.ScrollMode.AUTO,
-                        height=_CARD_CONTENT_HEIGHT,
-                        controls=upcoming_controls,
+                    _content_surface(
+                        "#0ea5e9",
+                        content=ft.Column(
+                            spacing=10,
+                            scroll=ft.ScrollMode.AUTO,
+                            height=_CARD_CONTENT_HEIGHT - 16,
+                            controls=upcoming_controls,
+                        ),
                     )
                     if upcoming_controls else
                     _empty_dashboard_state(
@@ -2249,13 +2447,12 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
         "cashflow_table": _wrap_dashboard_module(
             "cashflow_table",
-            {"xs": 12},
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _cashflow_table_card(
                 monthly_cashflow,
                 peso,
                 header_action=header_action,
             ),
-            feedback_width=860,
         ),
     }
 
