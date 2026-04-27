@@ -378,6 +378,8 @@ def build_ml_forecast_card(
 
     body = ft.Column(
         spacing=10,
+        scroll=ft.ScrollMode.AUTO,
+        height=_CARD_CONTENT_HEIGHT,
         controls=[
             ft.Row(
                 alignment=ft.MainAxisAlignment.START,
