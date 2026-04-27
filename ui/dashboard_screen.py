@@ -4,6 +4,7 @@ from ml_ui_cards import build_ml_forecast_card, build_ml_anomaly_card
 import ml_engine
 import asyncio
 import base64
+import json
 import threading
 from datetime import date, timedelta
 from io import BytesIO
@@ -870,16 +871,50 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
 # Dashboard screen — professional redesign
 # ---------------------------------------------------------------------------
 
+def _empty_dashboard_state(icon_text: str, title: str, message: str, *, height: int) -> ft.Control:
+    return ft.Container(
+        height=height,
+        alignment=ft.Alignment(0, 0),
+        content=ft.Column(
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=10,
+            controls=[
+                ft.Text(icon_text, size=30),
+                ft.Text(
+                    title,
+                    size=13,
+                    weight=ft.FontWeight.W_600,
+                    color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Text(
+                    message,
+                    size=11,
+                    color=ft.Colors.with_opacity(0.46, ft.Colors.ON_SURFACE),
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            ],
+        ),
+    )
+
+
 def _stat_card(label: str, value: str, subtitle: str = "",
                value_color=ft.Colors.WHITE, icon: str = "",
                accent_color: str = "#334155") -> ft.Control:
-    """A polished stat tile with icon accent strip."""
+    """A polished stat tile with uniform sizing and spacing."""
     controls = [
         ft.Row(spacing=8, controls=[
             ft.Text(icon, size=18) if icon else ft.Container(),
             ft.Text(label, size=12, color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)),
         ]),
-        ft.Text(value, size=21, weight=ft.FontWeight.BOLD, color=value_color),
+        ft.Text(
+            value,
+            size=21,
+            weight=ft.FontWeight.BOLD,
+            color=value_color,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        ),
     ]
     if subtitle:
         controls.append(
@@ -888,8 +923,10 @@ def _stat_card(label: str, value: str, subtitle: str = "",
     return ft.Card(
         elevation=2,
         content=ft.Container(
+            height=118,
             padding=ft.Padding(left=14, right=14, top=12, bottom=12),
-            content=ft.Column(spacing=4, controls=controls),
+            border_radius=16,
+            content=ft.Column(spacing=4, alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=controls),
             border=ft.border.Border(left=ft.BorderSide(3, accent_color)),
         ),
     )
@@ -929,7 +966,7 @@ def _budget_progress_row(category: str, spent: float, limit: float,
         ft.ProgressBar(
             value=pct,
             color=bar_color,
-            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
+            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
             border_radius=5,
             height=8,
         ),
@@ -943,12 +980,13 @@ def _section_card(
     icon,
     accent_color: str,
     content: ft.Control,
+    header_action: ft.Control | None = None,
 ) -> ft.Control:
     return ft.Card(
         elevation=2,
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=14, bottom=14),
-            border_radius=18,
+            border_radius=16,
             expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.Alignment(-1, -1),
@@ -967,26 +1005,33 @@ def _section_card(
                         spacing=10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Container(
-                                width=34,
-                                height=34,
-                                border_radius=17,
-                                bgcolor=ft.Colors.with_opacity(0.14, accent_color),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(icon, size=18, color=accent_color),
-                            ),
-                            ft.Column(
-                                spacing=2,
+                            ft.Row(
+                                spacing=10,
                                 expand=True,
                                 controls=[
-                                    ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
-                                    ft.Text(
-                                        subtitle,
-                                        size=11,
-                                        color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                    ft.Container(
+                                        width=34,
+                                        height=34,
+                                        border_radius=17,
+                                        bgcolor=ft.Colors.with_opacity(0.14, accent_color),
+                                        alignment=ft.Alignment(0, 0),
+                                        content=ft.Icon(icon, size=18, color=accent_color),
+                                    ),
+                                    ft.Column(
+                                        spacing=2,
+                                        expand=True,
+                                        controls=[
+                                            ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
+                                            ft.Text(
+                                                subtitle,
+                                                size=11,
+                                                color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
+                            *( [header_action] if header_action is not None else [] ),
                         ],
                     ),
                     content,
@@ -1074,13 +1119,16 @@ def _chart_card(
     accent_color: str,
     b64: str | None,
     placeholder: str,
+    empty_title: str = "Waiting for data",
     image_height: int = 220,
+    header_action: ft.Control | None = None,
 ) -> ft.Control:
     return _section_card(
         title,
         subtitle,
         icon=icon,
         accent_color=accent_color,
+        header_action=header_action,
         content=(
             ft.Container(
                 height=image_height,
@@ -1092,35 +1140,67 @@ def _chart_card(
                 ),
             )
             if b64 else
-            ft.Container(
+            _empty_dashboard_state(
+                "📈",
+                empty_title,
+                placeholder,
                 height=image_height,
-                alignment=ft.Alignment(0, 0),
-                content=ft.Text(
-                    placeholder,
-                    size=13,
-                    color=ft.Colors.with_opacity(0.46, ft.Colors.ON_SURFACE),
-                    text_align=ft.TextAlign.CENTER,
-                ),
             )
         ),
     )
 
 
 _CARD_CONTENT_HEIGHT = 260  # Fixed height for all card body areas
+_DASHBOARD_ORDER_KEY = "dashboard_layout_order"
+_DEFAULT_DASHBOARD_MODULE_ORDER = [
+    "daily_trend",
+    "cashflow_pulse",
+    "category_breakdown",
+    "weekday_rhythm",
+    "top_categories",
+    "leaderboard",
+    "budget_progress",
+    "upcoming_bills",
+    "ml_forecast",
+    "ml_anomalies",
+    "cashflow_table",
+]
 
 
-def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn) -> ft.Control:
+def _load_dashboard_module_order() -> list[str]:
+    raw_value = db.get_app_meta(_DASHBOARD_ORDER_KEY)
+    if not raw_value:
+        return _DEFAULT_DASHBOARD_MODULE_ORDER.copy()
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return _DEFAULT_DASHBOARD_MODULE_ORDER.copy()
+
+    if not isinstance(parsed, list):
+        return _DEFAULT_DASHBOARD_MODULE_ORDER.copy()
+
+    normalized = [item for item in parsed if item in _DEFAULT_DASHBOARD_MODULE_ORDER]
+    for item in _DEFAULT_DASHBOARD_MODULE_ORDER:
+        if item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+def _leaderboard_card(
+    expense_map: dict[str, float],
+    month_total: float,
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+) -> ft.Control:
     rows = sorted(expense_map.items(), key=lambda item: item[1], reverse=True)
     if not rows:
-        body = ft.Container(
+        body = _empty_dashboard_state(
+            "🏆",
+            "No category rankings yet",
+            "Add expenses and this table will rank your top spending categories here.",
             height=_CARD_CONTENT_HEIGHT,
-            alignment=ft.Alignment(0, 0),
-            content=ft.Text(
-                "Add a few expenses to unlock the spending leaderboard.",
-                size=12,
-                color=ft.Colors.with_opacity(0.46, ft.Colors.ON_SURFACE),
-                text_align=ft.TextAlign.CENTER,
-            ),
         )
     else:
         header = ft.Row(
@@ -1138,7 +1218,7 @@ def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn
                 ft.Container(
                     padding=ft.Padding(left=10, right=10, top=10, bottom=10),
                     border_radius=12,
-                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                     content=ft.Row(
                         controls=[
                             ft.Container(expand=1, content=ft.Text(f"{idx}", size=12, weight=ft.FontWeight.W_600, color="#38bdf8")),
@@ -1169,20 +1249,22 @@ def _leaderboard_card(expense_map: dict[str, float], month_total: float, peso_fn
         icon=ft.Icons.TABLE_ROWS_ROUNDED,
         accent_color="#38bdf8",
         content=body,
+        header_action=header_action,
     )
 
 
-def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) -> ft.Control:
+def _cashflow_table_card(
+    monthly_rows: list[tuple[str, float, float]],
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+) -> ft.Control:
     if not monthly_rows:
-        body = ft.Container(
+        body = _empty_dashboard_state(
+            "🧾",
+            "No cashflow history yet",
+            "Log income and expenses across a few weeks to compare your monthly cashflow here.",
             height=_CARD_CONTENT_HEIGHT,
-            alignment=ft.Alignment(0, 0),
-            content=ft.Text(
-                "Cashflow history will appear after you log a few weeks of activity.",
-                size=12,
-                color=ft.Colors.with_opacity(0.46, ft.Colors.ON_SURFACE),
-                text_align=ft.TextAlign.CENTER,
-            ),
         )
     else:
         header = ft.Row(
@@ -1200,7 +1282,7 @@ def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) 
                 ft.Container(
                     padding=ft.Padding(left=10, right=10, top=10, bottom=10),
                     border_radius=12,
-                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                     content=ft.Row(
                         controls=[
                             ft.Container(expand=2, content=ft.Text(label, size=12, weight=ft.FontWeight.W_500)),
@@ -1231,6 +1313,7 @@ def _cashflow_table_card(monthly_rows: list[tuple[str, float, float]], peso_fn) 
         icon=ft.Icons.GRID_VIEW_ROUNDED,
         accent_color="#22c55e",
         content=body,
+        header_action=header_action,
     )
 
 
@@ -1432,7 +1515,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     )
 
     # ── STAT TILES ──────────────────────────────────────────────────────────
-    stat_row = ft.ResponsiveRow(spacing=8, controls=[
+    stat_row = ft.ResponsiveRow(spacing=12, controls=[
         ft.Container(col={"xs": 6, "md": 3}, content=_stat_card(
             "Net Cashflow",
             ("+" if net_cashflow >= 0 else "") + peso(net_cashflow),
@@ -1621,6 +1704,37 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     ) if budget_limits else None
 
+    budget_section_controls = [
+        _budget_progress_row(
+            b.category,
+            expense_map.get(b.category, 0.0),
+            b.monthly_limit,
+            peso,
+        )
+        for b in budget_limits
+    ]
+    budget_card = _section_card(
+        "Budget Progress",
+        "Track how each category is pacing against its current limit.",
+        icon=ft.Icons.MY_LOCATION,
+        accent_color="#f59e0b",
+        content=(
+            ft.Column(
+                spacing=12,
+                scroll=ft.ScrollMode.AUTO,
+                height=_CARD_CONTENT_HEIGHT,
+                controls=budget_section_controls,
+            )
+            if budget_section_controls else
+            _empty_dashboard_state(
+                "🎯",
+                "No budgets yet",
+                "Create a budget limit in the Budgets tab and your category progress will appear here.",
+                height=_CARD_CONTENT_HEIGHT,
+            )
+        ),
+    )
+
     # ── UPCOMING BILLS ──────────────────────────────────────────────────────
     upcoming_controls: list[ft.Control] = []
     for u in upcoming:
@@ -1688,6 +1802,28 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     ) if True else None  # always show
 
+    upcoming_card = _section_card(
+        "Upcoming Bills",
+        "Recurring income and bills scheduled next.",
+        icon=ft.Icons.CALENDAR_MONTH_ROUNDED,
+        accent_color="#0ea5e9",
+        content=(
+            ft.Column(
+                spacing=10,
+                scroll=ft.ScrollMode.AUTO,
+                height=_CARD_CONTENT_HEIGHT,
+                controls=upcoming_controls,
+            )
+            if upcoming_controls else
+            _empty_dashboard_state(
+                "📅",
+                "No recurring items yet",
+                "Add a recurring bill or income and upcoming due dates will show here.",
+                height=_CARD_CONTENT_HEIGHT,
+            )
+        ),
+    )
+
     # ── CHART CARDS ──────────────────────────────────────────────────────────
     def _legacy_chart_card(b64: str | None, title: str, placeholder: str) -> ft.Control:
         return ft.Card(
@@ -1713,124 +1849,258 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         )
 
     # ── ASSEMBLE DASHBOARD ───────────────────────────────────────────────────
+    module_order = _load_dashboard_module_order()
+    module_grid = ft.ResponsiveRow(spacing=12, run_spacing=12)
+
+    def _persist_dashboard_order() -> None:
+        db.set_app_meta(_DASHBOARD_ORDER_KEY, json.dumps(module_order))
+
+    def _drag_handle(module_id: str) -> ft.Control:
+        return ft.Container(
+            width=30,
+            height=30,
+            border_radius=15,
+            bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
+            alignment=ft.Alignment(0, 0),
+            content=ft.Icon(
+                ft.Icons.DRAG_INDICATOR,
+                size=16,
+                color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+            ),
+        )
+
+    def _on_module_drop(e, target_id: str) -> None:
+        source_control = getattr(e, "src", None)
+        if source_control is None and getattr(e, "src_id", None):
+            source_control = page.get_control(e.src_id)
+        source_id = getattr(source_control, "data", None)
+        if not source_id or source_id == target_id:
+            return
+        if source_id not in module_order or target_id not in module_order:
+            return
+
+        source_index = module_order.index(source_id)
+        target_index = module_order.index(target_id)
+        module_order[source_index], module_order[target_index] = (
+            module_order[target_index],
+            module_order[source_index],
+        )
+        module_grid.controls = [dashboard_modules[module_id] for module_id in module_order]
+        _persist_dashboard_order()
+        page.update()
+
+    def _wrap_dashboard_module(module_id: str, col_spec: dict[str, int], builder, feedback_width: int = 420) -> ft.Control:
+        live_content = builder(_drag_handle(module_id))
+        feedback_content = builder(None)
+        return ft.Container(
+            col=col_spec,
+            content=ft.DragTarget(
+                group="dashboard-module",
+                on_accept=lambda e, target=module_id: _on_module_drop(e, target),
+                content=ft.Draggable(
+                    group="dashboard-module",
+                    data=module_id,
+                    content=live_content,
+                    content_feedback=ft.Container(
+                        width=feedback_width,
+                        padding=8,
+                        content=feedback_content,
+                    ),
+                    content_when_dragging=ft.Container(
+                        border_radius=16,
+                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
+                        border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)),
+                        height=_CARD_CONTENT_HEIGHT + 74,
+                    ),
+                ),
+            ),
+        )
+
+    dashboard_modules = {
+        "daily_trend": _wrap_dashboard_module(
+            "daily_trend",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _chart_card(
+                "Daily Spending Trend",
+                "Your last 30 days of expense activity.",
+                icon=ft.Icons.SHOW_CHART_ROUNDED,
+                accent_color="#38bdf8",
+                b64=line_b64,
+                placeholder="Log expenses and your last 30 days of spending will chart here.",
+                empty_title="No trend data yet",
+                image_height=_CARD_CONTENT_HEIGHT,
+                header_action=header_action,
+            ),
+        ),
+        "cashflow_pulse": _wrap_dashboard_module(
+            "cashflow_pulse",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _chart_card(
+                "Cashflow Pulse",
+                "Income, spending, and net movement across recent months.",
+                icon=ft.Icons.INSIGHTS_ROUNDED,
+                accent_color="#22c55e",
+                b64=cashflow_b64,
+                placeholder="Add income and expenses to compare your monthly cashflow here.",
+                empty_title="No cashflow history yet",
+                image_height=_CARD_CONTENT_HEIGHT,
+                header_action=header_action,
+            ),
+        ),
+        "category_breakdown": _wrap_dashboard_module(
+            "category_breakdown",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _chart_card(
+                "Spending by Category",
+                "A distribution view of where the month is going.",
+                icon=ft.Icons.DONUT_LARGE_ROUNDED,
+                accent_color="#8b5cf6",
+                b64=donut_b64,
+                placeholder="Add expenses and this chart will show where your money goes.",
+                empty_title="No category data yet",
+                image_height=_CARD_CONTENT_HEIGHT,
+                header_action=header_action,
+            ),
+        ),
+        "weekday_rhythm": _wrap_dashboard_module(
+            "weekday_rhythm",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _chart_card(
+                "Weekday Rhythm",
+                "See which days tend to attract the most spending.",
+                icon=ft.Icons.CALENDAR_VIEW_WEEK_ROUNDED,
+                accent_color="#f59e0b",
+                b64=weekday_b64,
+                placeholder="Keep logging expenses and this chart will reveal your busiest spending days.",
+                empty_title="No weekday pattern yet",
+                image_height=_CARD_CONTENT_HEIGHT,
+                header_action=header_action,
+            ),
+        ),
+        "top_categories": _wrap_dashboard_module(
+            "top_categories",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _chart_card(
+                "Top Categories",
+                "Your highest-spend categories at a glance.",
+                icon=ft.Icons.BAR_CHART_ROUNDED,
+                accent_color="#06b6d4",
+                b64=bar_b64,
+                placeholder="Add expenses and this chart will compare your highest-spend categories.",
+                empty_title="No top categories yet",
+                image_height=_CARD_CONTENT_HEIGHT,
+                header_action=header_action,
+            ),
+        ),
+        "leaderboard": _wrap_dashboard_module(
+            "leaderboard",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _leaderboard_card(
+                expense_map,
+                month_total,
+                peso,
+                header_action=header_action,
+            ),
+        ),
+        "budget_progress": _wrap_dashboard_module(
+            "budget_progress",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _section_card(
+                "Budget Progress",
+                "Track how each category is pacing against its current limit.",
+                icon=ft.Icons.MY_LOCATION,
+                accent_color="#f59e0b",
+                header_action=header_action,
+                content=(
+                    ft.Column(
+                        spacing=12,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_CARD_CONTENT_HEIGHT,
+                        controls=budget_section_controls,
+                    )
+                    if budget_section_controls else
+                    _empty_dashboard_state(
+                        "🎯",
+                        "No budgets yet",
+                        "Create a budget limit in the Budgets tab and your category progress will appear here.",
+                        height=_CARD_CONTENT_HEIGHT,
+                    )
+                ),
+            ),
+        ),
+        "upcoming_bills": _wrap_dashboard_module(
+            "upcoming_bills",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: _section_card(
+                "Upcoming Bills",
+                "Recurring income and bills scheduled next.",
+                icon=ft.Icons.CALENDAR_MONTH_ROUNDED,
+                accent_color="#0ea5e9",
+                header_action=header_action,
+                content=(
+                    ft.Column(
+                        spacing=10,
+                        scroll=ft.ScrollMode.AUTO,
+                        height=_CARD_CONTENT_HEIGHT,
+                        controls=upcoming_controls,
+                    )
+                    if upcoming_controls else
+                    _empty_dashboard_state(
+                        "📅",
+                        "No recurring items yet",
+                        "Add a recurring bill or income and upcoming due dates will show here.",
+                        height=_CARD_CONTENT_HEIGHT,
+                    )
+                ),
+            ),
+        ),
+        "ml_forecast": _wrap_dashboard_module(
+            "ml_forecast",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: build_ml_forecast_card(
+                ml_forecast,
+                peso,
+                header_action=header_action,
+            ),
+        ),
+        "ml_anomalies": _wrap_dashboard_module(
+            "ml_anomalies",
+            {"xs": 12, "sm": 6, "md": 6, "xl": 6},
+            lambda header_action: build_ml_anomaly_card(
+                ml_anomalies,
+                peso,
+                header_action=header_action,
+            ),
+        ),
+        "cashflow_table": _wrap_dashboard_module(
+            "cashflow_table",
+            {"xs": 12},
+            lambda header_action: _cashflow_table_card(
+                monthly_cashflow,
+                peso,
+                header_action=header_action,
+            ),
+            feedback_width=860,
+        ),
+    }
+
+    module_grid.controls = [
+        dashboard_modules[module_id]
+        for module_id in module_order
+        if module_id in dashboard_modules
+    ]
+
     sections: list[ft.Control] = [
         balance_card,
         stat_row,
         ai_card,
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12, "lg": 7},
-                    content=_chart_card(
-                        "Daily Spending Trend",
-                        "The last 30 days of expense activity.",
-                        icon=ft.Icons.SHOW_CHART_ROUNDED,
-                        accent_color="#38bdf8",
-                        b64=line_b64,
-                        placeholder="No trend data yet.",
-                        image_height=240,
-                    ),
-                ),
-                ft.Container(
-                    col={"xs": 12, "lg": 5},
-                    content=_chart_card(
-                        "Cashflow Pulse",
-                        "Income, spending, and net movement across recent months.",
-                        icon=ft.Icons.INSIGHTS_ROUNDED,
-                        accent_color="#22c55e",
-                        b64=cashflow_b64,
-                        placeholder="No cashflow history yet.",
-                        image_height=240,
-                    ),
-                ),
-            ],
-        ),
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=_chart_card(
-                        "Spending by Category",
-                        "A distribution view of where the month is going.",
-                        icon=ft.Icons.DONUT_LARGE_ROUNDED,
-                        accent_color="#8b5cf6",
-                        b64=donut_b64,
-                        placeholder="No expense data yet.",
-                    ),
-                ),
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=_chart_card(
-                        "Weekday Rhythm",
-                        "See which days tend to attract the most spending.",
-                        icon=ft.Icons.CALENDAR_VIEW_WEEK_ROUNDED,
-                        accent_color="#f59e0b",
-                        b64=weekday_b64,
-                        placeholder="Need more expense history to map your weekday rhythm.",
-                    ),
-                ),
-            ],
-        ),
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=_chart_card(
-                        "Top Categories",
-                        "Your highest-spend categories at a glance.",
-                        icon=ft.Icons.BAR_CHART_ROUNDED,
-                        accent_color="#06b6d4",
-                        b64=bar_b64,
-                        placeholder="No expense data yet.",
-                    ),
-                ),
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=_leaderboard_card(expense_map, month_total, peso),
-                ),
-            ],
-        ),
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=budget_card or ft.Container(),
-                ),
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=upcoming_card or ft.Container(),
-                ),
-            ],
-        ),
-        
-        # Add your ML cards here
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=build_ml_forecast_card(ml_forecast, peso),
-                ),
-                ft.Container(
-                    col={"xs": 12, "md": 6},
-                    content=build_ml_anomaly_card(ml_anomalies, peso),
-                ),
-            ],
-        ),
-
-        ft.ResponsiveRow(
-            controls=[
-                ft.Container(
-                    col={"xs": 12},
-                    content=_cashflow_table_card(monthly_cashflow, peso),
-                ),
-            ],
-        ),
+        module_grid,
     ]
 
     return ft.Column(
         expand=True,
         scroll=ft.ScrollMode.AUTO,
-        spacing=10,
+        spacing=12,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=sections,
     )

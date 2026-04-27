@@ -491,6 +491,29 @@ def set_starting_balance(amount: float) -> None:
     conn.close()
 
 
+def get_app_meta(key: str, default: Optional[str] = None) -> Optional[str]:
+    conn = _connect()
+    row = conn.execute(
+        "SELECT value FROM app_meta WHERE key = ?",
+        (key,),
+    ).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_app_meta(key: str, value: str) -> None:
+    conn = _connect()
+    conn.execute(
+        """
+        INSERT INTO app_meta(key, value) VALUES(?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_balance() -> float:
     """
     Balance only counts transactions whose txn_date is on or before today.

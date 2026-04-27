@@ -104,6 +104,7 @@ def _section_card(
     icon,
     accent_color: str,
     content: ft.Control,
+    header_action: ft.Control | None = None,
 ) -> ft.Control:
     """
     Matches the _section_card() helper in dashboard_screen.py exactly.
@@ -113,7 +114,7 @@ def _section_card(
         elevation=2,
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=14, bottom=14),
-            border_radius=18,
+            border_radius=16,
             expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.Alignment(-1, -1),
@@ -132,22 +133,29 @@ def _section_card(
                         spacing=10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Container(
-                                width=34, height=34, border_radius=17,
-                                bgcolor=ft.Colors.with_opacity(0.14, accent_color),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(icon, size=18, color=accent_color),
-                            ),
-                            ft.Column(
-                                spacing=2, expand=True,
+                            ft.Row(
+                                spacing=10,
+                                expand=True,
                                 controls=[
-                                    ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
-                                    ft.Text(
-                                        subtitle, size=11,
-                                        color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                    ft.Container(
+                                        width=34, height=34, border_radius=17,
+                                        bgcolor=ft.Colors.with_opacity(0.14, accent_color),
+                                        alignment=ft.Alignment(0, 0),
+                                        content=ft.Icon(icon, size=18, color=accent_color),
+                                    ),
+                                    ft.Column(
+                                        spacing=2, expand=True,
+                                        controls=[
+                                            ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
+                                            ft.Text(
+                                                subtitle, size=11,
+                                                color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
+                            *( [header_action] if header_action is not None else [] ),
                         ],
                     ),
                     content,
@@ -247,7 +255,12 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
     return b64
 
 
-def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
+def build_ml_forecast_card(
+    forecast_summary: list[dict],
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+) -> ft.Control:
     """
     Build the "Next Month Forecast" section card for the dashboard.
 
@@ -288,6 +301,7 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
             icon=ft.Icons.AUTO_GRAPH_ROUNDED,
             accent_color="#a78bfa",
             content=empty_body,
+            header_action=header_action,
         )
 
     # ── Chart ─────────────────────────────────────────────────────────────────
@@ -375,6 +389,7 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
         icon=ft.Icons.AUTO_GRAPH_ROUNDED,
         accent_color="#a78bfa",
         content=body,
+        header_action=header_action,
     )
 
 
@@ -403,7 +418,12 @@ def _suspicion_level(score: float) -> tuple[str, ft.Colors]:
         return "Low 🔵", ft.Colors.BLUE_300
 
 
-def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
+def build_ml_anomaly_card(
+    anomalies: list[dict],
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+) -> ft.Control:
     """
     Build the "Flagged Transactions" section card for the dashboard.
 
@@ -483,6 +503,7 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
                 alignment=ft.Alignment(0, 0),
                 content=body_content,
             ),
+            header_action=header_action,
         )
 
     # ── Anomalies found — build table ─────────────────────────────────────────
@@ -520,7 +541,7 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
             ft.Container(
                 padding=ft.Padding(left=10, right=10, top=9, bottom=9),
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                 content=ft.Row(controls=[
                     ft.Container(expand=2, content=ft.Text(
                         date_str, size=11,
@@ -573,4 +594,5 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
         icon=ft.Icons.POLICY_ROUNDED,
         accent_color="#f472b6",
         content=body,
+        header_action=header_action,
     )

@@ -1226,6 +1226,39 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     )
 
+    def _build_filter_date_button(label: str) -> tuple[list[date | None], ft.OutlinedButton]:
+        selected: list[date | None] = [None]
+        button_label = ft.Text(label)
+        button = ft.OutlinedButton(
+            content=button_label,
+            icon=ft.Icons.CALENDAR_MONTH,
+        )
+        picker = ft.DatePicker(
+            first_date=datetime(2020, 1, 1),
+            last_date=datetime(2099, 12, 31),
+        )
+
+        def _sync_button() -> None:
+            button_label.value = selected[0].strftime("%b %d, %Y") if selected[0] else label
+            button.icon_color = ft.Colors.CYAN_300 if selected[0] else None
+
+        def _on_change(e):
+            picked = calendar_date_from_picker(picker, e)
+            if picked is None:
+                return
+            selected[0] = picked
+            _sync_button()
+            refresh_list()
+
+        picker.on_change = _on_change
+        page.overlay.append(picker)
+        button.on_click = lambda _: _open_picker(page, picker, selected[0] or date.today())
+        _sync_button()
+        return selected, button
+
+    date_from_filter, date_from_btn = _build_filter_date_button("Start date")
+    date_to_filter, date_to_btn = _build_filter_date_button("End date")
+
     one_time_list = ft.Column(spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
     show_recurring_state = [False]
     rec_container = ft.Column(visible=False, spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
@@ -1237,26 +1270,49 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         )
 
     def refresh_list(_=None):
+        date_from = date_from_filter[0]
+        date_to = date_to_filter[0]
+        if date_from and date_to and date_from > date_to:
+            date_from, date_to = date_to, date_from
+
         txns = db.get_transactions(
             search=search_field.value.strip(),
             category=category_filter.value,
+            date_from=date_from.isoformat() if date_from else None,
+            date_to=date_to.isoformat() if date_to else None,
         )
         one_time_list.controls.clear()
 
         if not txns:
+            has_filters = bool(
+                search_field.value.strip()
+                or (category_filter.value and category_filter.value != "All")
+                or date_from
+                or date_to
+            )
             one_time_list.controls.append(
                 ft.Container(
                     padding=40,
                     alignment=ft.Alignment(0, 0),
                     content=ft.Column(
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=10,
                         controls=[
                             ft.Icon(ft.Icons.RECEIPT_LONG_OUTLINED, size=52, color=ft.Colors.with_opacity(0.24, ft.Colors.ON_SURFACE)),
                             ft.Text(
-                                "Walang transactions pa.\nTap Add Expense para magsimula!",
-                                color=ft.Colors.with_opacity(0.38, ft.Colors.ON_SURFACE),
+                                "No matching transactions" if has_filters else "No transactions yet",
+                                color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
                                 text_align=ft.TextAlign.CENTER,
                                 size=14,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            ft.Text(
+                                "Try a different search, category, or date range."
+                                if has_filters else
+                                "Add your first expense or income and your transaction history will appear here.",
+                                color=ft.Colors.with_opacity(0.42, ft.Colors.ON_SURFACE),
+                                text_align=ft.TextAlign.CENTER,
+                                size=12,
                             ),
                         ],
                     ),
@@ -1462,6 +1518,20 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         on_click=toggle_recurring_view,
     )
 
+    def clear_filters(_=None):
+        search_field.value = ""
+        category_filter.value = "All"
+        date_from_filter[0] = None
+        date_to_filter[0] = None
+        date_from_btn.content.value = "Start date"
+        date_to_btn.content.value = "End date"
+        date_from_btn.icon_color = None
+        date_to_btn.icon_color = None
+        refresh_list()
+
+    search_field.on_submit = refresh_list
+    category_filter.on_change = refresh_list
+
     toolbar = ft.Row(
         wrap=True,
         spacing=8,
@@ -1484,12 +1554,19 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     filter_row = ft.ResponsiveRow(
         controls=[
-            ft.Container(col={"xs": 12, "md": 7}, content=search_field),
-            ft.Container(col={"xs": 12, "md": 4}, content=category_filter),
+            ft.Container(col={"xs": 12, "lg": 4}, content=search_field),
+            ft.Container(col={"xs": 12, "md": 6, "lg": 2}, content=category_filter),
+            ft.Container(col={"xs": 12, "md": 6, "lg": 2}, content=date_from_btn),
+            ft.Container(col={"xs": 12, "md": 6, "lg": 2}, content=date_to_btn),
             ft.Container(
-                col={"xs": 12, "md": 1},
+                col={"xs": 6, "md": 3, "lg": 1},
                 alignment=ft.Alignment(1, 0),
                 content=ft.IconButton(ft.Icons.SEARCH, tooltip="Search", on_click=refresh_list),
+            ),
+            ft.Container(
+                col={"xs": 6, "md": 3, "lg": 1},
+                alignment=ft.Alignment(1, 0),
+                content=ft.IconButton(ft.Icons.CLEAR_ALL, tooltip="Clear filters", on_click=clear_filters),
             ),
         ],
     )
@@ -1504,6 +1581,7 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         controls=[
             toolbar,
             ft.Card(
+                elevation=2,
                 content=ft.Container(
                     padding=10,
                     content=ft.Column(
@@ -1521,7 +1599,24 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 ),
                 visible=True,
             ),
-            filter_row,
+            ft.Card(
+                elevation=2,
+                content=ft.Container(
+                    padding=12,
+                    content=ft.Column(
+                        spacing=8,
+                        controls=[
+                            ft.Text("Find Transactions", weight=ft.FontWeight.BOLD, size=13),
+                            ft.Text(
+                                "Search by keyword, category, or a single day or date range.",
+                                size=11,
+                                color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE),
+                            ),
+                            filter_row,
+                        ],
+                    ),
+                ),
+            ),
             ft.Text("All Transactions", weight=ft.FontWeight.BOLD, size=13),
             one_time_list,
         ],
