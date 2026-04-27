@@ -48,13 +48,56 @@ def _parse_notify_tag(reply: str) -> tuple[str, str | None, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# Chart helpers — professional dark-theme matplotlib charts
+# Chart helpers
 # ---------------------------------------------------------------------------
 
 _PALETTE = ["#38bdf8", "#818cf8", "#fb923c", "#34d399", "#f472b6",
             "#fbbf24", "#a78bfa", "#22d3ee", "#4ade80", "#f87171"]
 _HOVER_ANIMATION = ft.Animation(140, ft.AnimationCurve.EASE_OUT_CUBIC)
 _SWAP_ANIMATION = ft.Animation(180, ft.AnimationCurve.EASE_OUT_CUBIC)
+
+
+def _is_light_theme(page: ft.Page) -> bool:
+    return page.theme_mode == ft.ThemeMode.LIGHT
+
+
+def _chart_theme(light_mode: bool) -> dict[str, str]:
+    if light_mode:
+        return {
+            "bg": "#f8fafc",
+            "text": "#0f172a",
+            "muted": "#64748b",
+            "subtle": "#94a3b8",
+            "grid": "#cbd5e1",
+            "edge": "#f8fafc",
+        }
+    return {
+        "bg": "#0f172a",
+        "text": "#ffffff",
+        "muted": "#64748b",
+        "subtle": "#94a3b8",
+        "grid": "#334155",
+        "edge": "#0f172a",
+    }
+
+
+def _chart_fig_width(viewport_width: float | None) -> float:
+    width = viewport_width or 900
+    cards_per_row = 1 if width < 640 else 2
+    usable_width = max(360, width - 72)
+    card_width = usable_width / cards_per_row
+    return min(9.6, max(5.4, card_width / 92))
+
+
+def _landscape_figsize(
+    viewport_width: float | None,
+    *,
+    min_height: float = 2.55,
+    max_height: float = 3.35,
+) -> tuple[float, float]:
+    fig_width = _chart_fig_width(viewport_width)
+    fig_height = min(max_height, max(min_height, fig_width / 3.0))
+    return fig_width, fig_height
 
 
 def _fig_to_b64(fig) -> str:
@@ -65,7 +108,12 @@ def _fig_to_b64(fig) -> str:
     return base64.b64encode(buf.read()).decode("utf-8")
 
 
-def _build_donut_chart(expense_map: dict[str, float]) -> str | None:
+def _build_donut_chart(
+    expense_map: dict[str, float],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     if not expense_map:
         return None
 
@@ -82,22 +130,23 @@ def _build_donut_chart(expense_map: dict[str, float]) -> str | None:
     total = sum(values)
     colors = _PALETTE[:len(labels)]
 
-    bg = "#0f172a"
-    fig, ax = plt.subplots(figsize=(5.2, 3.6), facecolor=bg)
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig, ax = plt.subplots(figsize=_landscape_figsize(viewport_width), facecolor=bg)
     ax.set_facecolor(bg)
 
     wedges, _ = ax.pie(
         values,
         colors=colors,
         startangle=90,
-        wedgeprops=dict(width=0.55, edgecolor=bg, linewidth=2),
+        wedgeprops=dict(width=0.55, edgecolor=theme["edge"], linewidth=2),
     )
 
     # Center label
     ax.text(0, 0.08, "Total", ha="center", va="center",
-            color="#94a3b8", fontsize=9, fontweight="normal")
+            color=theme["subtle"], fontsize=9, fontweight="normal")
     ax.text(0, -0.18, f"{total:,.0f}", ha="center", va="center",
-            color="white", fontsize=13, fontweight="bold")
+            color=theme["text"], fontsize=13, fontweight="bold")
 
     # Legend on right
     legend_items = [
@@ -110,21 +159,26 @@ def _build_donut_chart(expense_map: dict[str, float]) -> str | None:
         bbox_to_anchor=(1.0, 0.5),
         fontsize=7.5,
         frameon=False,
-        labelcolor="white",
+        labelcolor=theme["text"],
         handlelength=1.2,
         handleheight=1.0,
     )
 
-    ax.set_title("Spending by Category", color="white", fontsize=11,
+    ax.set_title("Spending by Category", color=theme["text"], fontsize=11,
                  fontweight="bold", pad=10)
-    fig.subplots_adjust(left=0.02, right=0.72)
+    fig.subplots_adjust(left=0.02, right=0.80, top=0.84, bottom=0.04)
 
     b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
 
 
-def _build_area_line_chart(points: list[tuple[str, float]]) -> str | None:
+def _build_area_line_chart(
+    points: list[tuple[str, float]],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     if not points:
         return None
 
@@ -132,8 +186,9 @@ def _build_area_line_chart(points: list[tuple[str, float]]) -> str | None:
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date")
 
-    bg = "#0f172a"
-    fig, ax = plt.subplots(figsize=(5.4, 2.9), facecolor=bg)
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig, ax = plt.subplots(figsize=_landscape_figsize(viewport_width), facecolor=bg)
     ax.set_facecolor(bg)
 
     x = np.arange(len(df))
@@ -143,13 +198,13 @@ def _build_area_line_chart(points: list[tuple[str, float]]) -> str | None:
     ax.fill_between(x, y, alpha=0.25, color="#38bdf8")
     ax.fill_between(x, y, alpha=0.10, color="#818cf8")
     ax.plot(x, y, color="#38bdf8", linewidth=2.2, zorder=3)
-    ax.scatter(x, y, color="#38bdf8", s=28, zorder=4, edgecolors=bg, linewidths=1.5)
+    ax.scatter(x, y, color="#38bdf8", s=28, zorder=4, edgecolors=theme["edge"], linewidths=1.5)
 
     # Highlight max point
     if len(y) > 0:
         max_idx = int(np.argmax(y))
         ax.scatter([x[max_idx]], [y[max_idx]], color="#f472b6", s=55, zorder=5,
-                   edgecolors=bg, linewidths=1.5)
+                   edgecolors=theme["edge"], linewidths=1.5)
         ax.annotate(f"{y[max_idx]:,.0f}",
                     (x[max_idx], y[max_idx]),
                     textcoords="offset points", xytext=(0, 10),
@@ -160,26 +215,32 @@ def _build_area_line_chart(points: list[tuple[str, float]]) -> str | None:
     tick_positions = x[::step]
     tick_labels = [df["date"].iloc[i].strftime("%b %d") for i in range(0, len(df), step)]
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, color="#64748b", fontsize=7.5, rotation=0)
-    ax.tick_params(axis="y", colors="#64748b", labelsize=7.5)
+    ax.set_xticklabels(tick_labels, color=theme["muted"], fontsize=7.5, rotation=0)
+    ax.tick_params(axis="y", colors=theme["muted"], labelsize=7.5)
     ax.tick_params(axis="x", length=0)
     ax.tick_params(axis="y", length=0)
 
     ax.set_facecolor(bg)
-    ax.grid(axis="y", alpha=0.12, color="#334155", linestyle="--")
+    ax.grid(axis="y", alpha=0.42 if light_mode else 0.12, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title("Daily Spending — Last 30 Days", color="white", fontsize=11,
+    ax.set_title("Daily Spending — Last 30 Days", color=theme["text"], fontsize=11,
                  fontweight="bold", pad=10)
+    fig.tight_layout(pad=1.0)
 
     b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
 
 
-def _build_bar_chart(expense_map: dict[str, float]) -> str | None:
+def _build_bar_chart(
+    expense_map: dict[str, float],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     if not expense_map:
         return None
 
@@ -190,8 +251,10 @@ def _build_bar_chart(expense_map: dict[str, float]) -> str | None:
     # Shorten long labels
     short_labels = [lb[:20] + "…" if len(lb) > 20 else lb for lb in labels]
 
-    bg = "#0f172a"
-    fig, ax = plt.subplots(figsize=(5.4, max(2.6, len(labels) * 0.42)), facecolor=bg)
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig_width, fig_height = _landscape_figsize(viewport_width)
+    fig, ax = plt.subplots(figsize=(fig_width, max(fig_height, len(labels) * 0.40)), facecolor=bg)
     ax.set_facecolor(bg)
 
     y_pos = np.arange(len(labels))
@@ -209,17 +272,17 @@ def _build_bar_chart(expense_map: dict[str, float]) -> str | None:
                 color=color, fontsize=8, fontweight="bold")
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(short_labels, color="#cbd5e1", fontsize=8.5)
+    ax.set_yticklabels(short_labels, color=theme["text"], fontsize=8.5)
     ax.invert_yaxis()
-    ax.tick_params(axis="x", colors="#475569", labelsize=7.5, length=0)
+    ax.tick_params(axis="x", colors=theme["muted"], labelsize=7.5, length=0)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, max_val * 1.32)
-    ax.grid(axis="x", alpha=0.10, color="#334155", linestyle="--")
+    ax.grid(axis="x", alpha=0.38 if light_mode else 0.10, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title("Top Spending Categories", color="white", fontsize=11,
+    ax.set_title("Top Spending Categories", color=theme["text"], fontsize=11,
                  fontweight="bold", pad=10)
 
     fig.tight_layout(pad=1.2)
@@ -1062,7 +1125,12 @@ def _content_surface(
     )
 
 
-def _build_cashflow_chart(monthly_rows: list[tuple[str, float, float]]) -> str | None:
+def _build_cashflow_chart(
+    monthly_rows: list[tuple[str, float, float]],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     if not monthly_rows:
         return None
 
@@ -1072,26 +1140,27 @@ def _build_cashflow_chart(monthly_rows: list[tuple[str, float, float]]) -> str |
     net = [inc - exp for inc, exp in zip(income, expense)]
     x = np.arange(len(labels))
 
-    bg = "#0f172a"
-    fig, ax = plt.subplots(figsize=(5.2, 3.2), facecolor=bg)
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig, ax = plt.subplots(figsize=_landscape_figsize(viewport_width), facecolor=bg)
     ax.set_facecolor(bg)
 
     width = 0.34
     ax.bar(x - width / 2, income, width=width, color="#22c55e", label="Income", zorder=3)
     ax.bar(x + width / 2, expense, width=width, color="#fb923c", label="Spend", zorder=3)
-    ax.plot(x, net, color="#e2e8f0", marker="o", linewidth=1.8, label="Net", zorder=4)
+    ax.plot(x, net, color=theme["text"], marker="o", linewidth=1.8, label="Net", zorder=4)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, color="#94a3b8", fontsize=8)
-    ax.tick_params(axis="y", colors="#64748b", labelsize=7.5, length=0)
+    ax.set_xticklabels(labels, color=theme["muted"], fontsize=8)
+    ax.tick_params(axis="y", colors=theme["muted"], labelsize=7.5, length=0)
     ax.tick_params(axis="x", length=0)
-    ax.grid(axis="y", alpha=0.10, color="#334155", linestyle="--")
+    ax.grid(axis="y", alpha=0.38 if light_mode else 0.10, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.legend(loc="upper left", frameon=False, fontsize=7.5, labelcolor="white")
-    ax.set_title("Income vs Spend", color="white", fontsize=11, fontweight="bold", pad=10)
+    ax.legend(loc="upper left", frameon=False, fontsize=7.5, labelcolor=theme["text"])
+    ax.set_title("Income vs Spend", color=theme["text"], fontsize=11, fontweight="bold", pad=10)
 
     fig.tight_layout(pad=1.1)
     b64 = _fig_to_b64(fig)
@@ -1099,7 +1168,12 @@ def _build_cashflow_chart(monthly_rows: list[tuple[str, float, float]]) -> str |
     return b64
 
 
-def _build_weekday_chart(weekday_rows: list[tuple[str, float]]) -> str | None:
+def _build_weekday_chart(
+    weekday_rows: list[tuple[str, float]],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     if not weekday_rows or not any(value > 0 for _, value in weekday_rows):
         return None
 
@@ -1108,23 +1182,24 @@ def _build_weekday_chart(weekday_rows: list[tuple[str, float]]) -> str | None:
     x = np.arange(len(labels))
     peak_idx = int(np.argmax(values))
 
-    bg = "#0f172a"
-    fig, ax = plt.subplots(figsize=(5.0, 2.9), facecolor=bg)
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig, ax = plt.subplots(figsize=_landscape_figsize(viewport_width), facecolor=bg)
     ax.set_facecolor(bg)
 
     colors = ["#38bdf8" if idx != peak_idx else "#f59e0b" for idx in range(len(labels))]
     ax.bar(x, values, color=colors, width=0.56, zorder=3)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, color="#94a3b8", fontsize=8)
-    ax.tick_params(axis="y", colors="#64748b", labelsize=7.5, length=0)
+    ax.set_xticklabels(labels, color=theme["muted"], fontsize=8)
+    ax.tick_params(axis="y", colors=theme["muted"], labelsize=7.5, length=0)
     ax.tick_params(axis="x", length=0)
-    ax.grid(axis="y", alpha=0.10, color="#334155", linestyle="--")
+    ax.grid(axis="y", alpha=0.38 if light_mode else 0.10, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.set_title("Spending Rhythm by Weekday", color="white", fontsize=11, fontweight="bold", pad=10)
+    ax.set_title("Spending Rhythm by Weekday", color=theme["text"], fontsize=11, fontweight="bold", pad=10)
 
     fig.tight_layout(pad=1.0)
     b64 = _fig_to_b64(fig)
@@ -1435,11 +1510,25 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             ]
 
     # Charts — generated once
-    donut_b64 = _build_donut_chart(expense_map)
-    line_b64 = _build_area_line_chart(db.get_expenses_last_days(30))
-    bar_b64 = _build_bar_chart(expense_map)
-    cashflow_b64 = _build_cashflow_chart(monthly_cashflow)
-    weekday_b64 = _build_weekday_chart(weekday_spend)
+    light_charts = _is_light_theme(page)
+    chart_viewport_width = page.width
+    donut_b64 = _build_donut_chart(expense_map, light_mode=light_charts, viewport_width=chart_viewport_width)
+    line_b64 = _build_area_line_chart(
+        db.get_expenses_last_days(30),
+        light_mode=light_charts,
+        viewport_width=chart_viewport_width,
+    )
+    bar_b64 = _build_bar_chart(expense_map, light_mode=light_charts, viewport_width=chart_viewport_width)
+    cashflow_b64 = _build_cashflow_chart(
+        monthly_cashflow,
+        light_mode=light_charts,
+        viewport_width=chart_viewport_width,
+    )
+    weekday_b64 = _build_weekday_chart(
+        weekday_spend,
+        light_mode=light_charts,
+        viewport_width=chart_viewport_width,
+    )
 
     # ── Build AI financial context ──────────────────────────────────────────
     today_str = today.isoformat()
@@ -2270,6 +2359,8 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             ml_forecast,
             peso,
             content_height=_expanded_dialog_size()[2],
+            light_mode=light_charts,
+            viewport_width=chart_viewport_width,
         ),
         "ml_anomalies": lambda: build_ml_anomaly_card(
             ml_anomalies,
@@ -2434,6 +2525,8 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 ml_forecast,
                 peso,
                 header_action=header_action,
+                light_mode=light_charts,
+                viewport_width=chart_viewport_width,
             ),
         ),
         "ml_anomalies": _wrap_dashboard_module(

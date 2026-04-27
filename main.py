@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 
 import flet as ft
 
@@ -55,11 +56,15 @@ def main(page: ft.Page):
 
     # Mutable references shared across closures
     nav_ref: list[ft.NavigationBar | None] = [None]
+    render_ref: list[Callable[[int], None] | None] = [None]
 
     def toggle_theme(_):
         page.theme_mode = (
             ft.ThemeMode.LIGHT if page.theme_mode == ft.ThemeMode.DARK else ft.ThemeMode.DARK
         )
+        if render_ref[0] is not None and nav_ref[0] is not None:
+            render_ref[0](nav_ref[0].selected_index)
+            return
         page.update()
 
     # ── USER SELECTION SCREEN ────────────────────────────────────────────────
@@ -793,9 +798,29 @@ def main(page: ft.Page):
                 title.value = "Settings"
                 content.content = settings_screen(page)
             page.update()
+        render_ref[0] = render
 
         def nav_change(e: ft.ControlEvent):
             render(e.control.selected_index)
+
+        resize_state = {
+            "width": page.width or 0,
+            "height": page.height or 0,
+        }
+
+        def handle_resize(_):
+            if nav_ref[0] is None or render_ref[0] is None:
+                return
+            width = page.width or 0
+            height = page.height or 0
+            width_changed = abs(width - resize_state["width"]) >= 32
+            height_changed = abs(height - resize_state["height"]) >= 48
+            if nav_ref[0].selected_index == 0 and (width_changed or height_changed):
+                resize_state["width"] = width
+                resize_state["height"] = height
+                render_ref[0](0)
+
+        page.on_resize = handle_resize
 
         nav = ft.NavigationBar(
             selected_index=0,
@@ -828,6 +853,8 @@ def main(page: ft.Page):
             notif.unsubscribe(_refresh_bell)
             notif.reset()
             nav_ref[0] = None
+            render_ref[0] = None
+            page.on_resize = None
             show_user_select(auto_resume=False)
 
         page.appbar = ft.AppBar(

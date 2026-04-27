@@ -88,6 +88,30 @@ _CARD_CONTENT_HEIGHT = 260  # matches dashboard_screen.py constant
 # INTERNAL HELPERS
 # =============================================================================
 
+def _chart_theme(light_mode: bool) -> dict[str, str]:
+    if light_mode:
+        return {
+            "bg": "#f8fafc",
+            "text": "#0f172a",
+            "muted": "#64748b",
+            "grid": "#cbd5e1",
+        }
+    return {
+        "bg": "#0f172a",
+        "text": "#ffffff",
+        "muted": "#475569",
+        "grid": "#334155",
+    }
+
+
+def _chart_fig_width(viewport_width: float | None) -> float:
+    width = viewport_width or 900
+    cards_per_row = 1 if width < 640 else 2
+    usable_width = max(360, width - 72)
+    card_width = usable_width / cards_per_row
+    return min(9.6, max(5.4, card_width / 92))
+
+
 def _fig_to_b64(fig) -> str:
     """Convert a matplotlib figure to base64 PNG string for Flet Image."""
     buf = BytesIO()
@@ -196,7 +220,12 @@ def _merge_header_actions(primary: ft.Control | None, secondary: ft.Control | No
 # CARD 1: SPENDING FORECAST
 # =============================================================================
 
-def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
+def _build_forecast_chart(
+    forecast_summary: list[dict],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     """
     Build a horizontal bar chart of predicted next-month spending.
 
@@ -227,9 +256,11 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
     # Shorten long labels
     short_labels = [lb[:22] + "…" if len(lb) > 22 else lb for lb in labels]
 
-    bg = "#0f172a"
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig_width = _chart_fig_width(viewport_width)
     fig, ax = plt.subplots(
-        figsize=(5.4, max(2.8, len(top) * 0.44)),
+        figsize=(fig_width, max(2.8, fig_width / 3.0, len(top) * 0.40)),
         facecolor=bg,
     )
     ax.set_facecolor(bg)
@@ -249,12 +280,12 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
         )
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(short_labels, color="#cbd5e1", fontsize=8.5)
+    ax.set_yticklabels(short_labels, color=theme["text"], fontsize=8.5)
     ax.invert_yaxis()
-    ax.tick_params(axis="x", colors="#475569", labelsize=7.5, length=0)
+    ax.tick_params(axis="x", colors=theme["muted"], labelsize=7.5, length=0)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, max_val * 1.35)
-    ax.grid(axis="x", alpha=0.10, color="#334155", linestyle="--")
+    ax.grid(axis="x", alpha=0.38 if light_mode else 0.10, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -267,13 +298,13 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
     ]
     ax.legend(
         handles=legend_handles, loc="lower right",
-        frameon=False, fontsize=7, labelcolor="white",
+        frameon=False, fontsize=7, labelcolor=theme["text"],
         handlelength=1.0,
     )
 
     ax.set_title(
         "Predicted Spending — Next Month",
-        color="white", fontsize=11, fontweight="bold", pad=10,
+        color=theme["text"], fontsize=11, fontweight="bold", pad=10,
     )
     fig.tight_layout(pad=1.2)
 
@@ -289,6 +320,8 @@ def build_ml_forecast_card(
     header_action: ft.Control | None = None,
     expanded: bool = False,
     content_height: int = _CARD_CONTENT_HEIGHT,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
 ) -> ft.Control:
     """
     Build the "Next Month Forecast" section card for the dashboard.
@@ -344,7 +377,11 @@ def build_ml_forecast_card(
         )
 
     # ── Chart ─────────────────────────────────────────────────────────────────
-    chart_b64 = _build_forecast_chart(forecast_summary)
+    chart_b64 = _build_forecast_chart(
+        forecast_summary,
+        light_mode=light_mode,
+        viewport_width=viewport_width,
+    )
 
     # ── Mini table below chart ────────────────────────────────────────────────
     # Show top 5 categories with trend arrows
@@ -420,6 +457,9 @@ def build_ml_forecast_card(
 def build_ml_forecast_expanded_card(
     forecast_summary: list[dict],
     peso_fn,
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
 ) -> ft.Control:
     forecast_reliability = (
         int(round(sum(int(item.get("reliability_pct", 0)) for item in forecast_summary) / len(forecast_summary)))
@@ -429,9 +469,18 @@ def build_ml_forecast_expanded_card(
     header_content = _reliability_badge(forecast_reliability, "#a78bfa") if forecast_reliability > 0 else None
 
     if not forecast_summary:
-        return build_ml_forecast_card(forecast_summary, peso_fn)
+        return build_ml_forecast_card(
+            forecast_summary,
+            peso_fn,
+            light_mode=light_mode,
+            viewport_width=viewport_width,
+        )
 
-    chart_b64 = _build_forecast_chart(forecast_summary)
+    chart_b64 = _build_forecast_chart(
+        forecast_summary,
+        light_mode=light_mode,
+        viewport_width=viewport_width,
+    )
     trend_icon = {"up": "â†‘", "down": "â†“", "stable": "â†’"}
     trend_color = {
         "up": ft.Colors.RED_300,
