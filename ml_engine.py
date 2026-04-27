@@ -43,6 +43,7 @@ If data is too thin, we skip training and return a clear message.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -65,6 +66,8 @@ ML_MODELS_DIR = Path("user_data") / "ml_models"
 # Minimum rows needed before we even attempt to train
 MIN_TRANSACTIONS_FOR_ANOMALY = 30   # need a decent sample to define "normal"
 MIN_MONTHS_FOR_FORECAST      = 3    # need at least 3 data points for a trend line
+MIN_TRANSACTIONS_FOR_LIVE_ANOMALY = 12
+LIVE_ANOMALY_TREES = 48
 
 # IsolationForest contamination: roughly what % of data we expect to be anomalies.
 # 0.05 means "flag the most extreme 5% as suspicious."
@@ -76,6 +79,9 @@ SCHEDULE_DAILY   = "daily"
 SCHEDULE_WEEKLY  = "weekly"
 SCHEDULE_MONTHLY = "monthly"
 VALID_SCHEDULES  = {SCHEDULE_DAILY, SCHEDULE_WEEKLY, SCHEDULE_MONTHLY}
+
+_retrain_lock = threading.Lock()
+_retraining_dbs: set[str] = set()
 
 
 # =============================================================================
@@ -98,6 +104,10 @@ def _get_model_dir() -> Path:
 def _model_path(name: str) -> Path:
     """Return the full .pkl path for a named model."""
     return _get_model_dir() / f"{name}.pkl"
+
+
+def _db_training_key() -> str:
+    return str(Path(db.DB_FILE).resolve())
 
 
 def _save_model(name: str, model) -> None:
@@ -322,6 +332,100 @@ def _get_monthly_category_totals() -> dict[str, list[tuple[int, float]]]:
     return category_data
 
 
+def _build_live_forecast(
+    category: str,
+    month_totals: list[tuple[int, float]],
+    model: LinearRegression | None,
+) -> dict[str, float | str | int]:
+    values = np.array([total for _, total in month_totals], dtype=float)
+    last_idx = month_totals[-1][0]
+    last_total = float(values[-1])
+
+    if model is not None:
+        predicted = float(model.predict([[last_idx + 1]])[0])
+        slope = float(model.coef_[0])
+        fit_score = float(model.score(np.array([[idx] for idx, _ in month_totals], dtype=float), values))
+    elif len(month_totals) >= 2:
+        prev_total = float(values[-2])
+        slope = last_total - prev_total
+        predicted = last_total + slope
+        fit_score = max(0.0, 1.0 - min(1.0, abs(slope) / max(last_total, prev_total, 1.0)))
+    else:
+        slope = 0.0
+        predicted = last_total
+        fit_score = 0.35
+
+    reliability = _forecast_reliability_pct(month_totals, fit_score)
+
+    if slope > 50:
+        trend = "up"
+    elif slope < -50:
+        trend = "down"
+    else:
+        trend = "stable"
+
+    return {
+        "category": category,
+        "predicted_amount": max(0.0, round(predicted, 2)),
+        "trend": trend,
+        "slope": round(slope, 2),
+        "reliability_pct": reliability,
+        "months_of_history": len(month_totals),
+    }
+
+
+def _forecast_reliability_pct(month_totals: list[tuple[int, float]], fit_score: float | None = None) -> int:
+    months_factor = min(1.0, len(month_totals) / 6.0)
+    values = np.array([total for _, total in month_totals], dtype=float)
+
+    if len(values) >= 2:
+        mean_value = max(float(values.mean()), 1.0)
+        volatility = float(np.std(values) / mean_value)
+        stability_factor = max(0.0, 1.0 - min(1.0, volatility))
+    else:
+        stability_factor = 0.35
+
+    fit_factor = 0.35 if fit_score is None else max(0.0, min(1.0, fit_score))
+    combined = (0.55 * months_factor) + (0.25 * stability_factor) + (0.20 * fit_factor)
+    return int(round(25 + combined * 70))
+
+
+def _anomaly_reliability_pct(transaction_count: int, transactions: list[dict] | None = None) -> int:
+    if transaction_count <= 0:
+        return 0
+
+    volume_factor = min(1.0, transaction_count / 80.0)
+    history = transactions if transactions is not None else _get_expense_transactions()
+    diversity_factor = min(1.0, len({t["category"] for t in history}) / 8.0)
+    combined = (0.75 * volume_factor) + (0.25 * diversity_factor)
+    return int(round(20 + combined * 75))
+
+
+def get_forecast_reliability_pct() -> int:
+    summary = get_forecast_summary()
+    if not summary:
+        return 0
+    return int(round(sum(int(item["reliability_pct"]) for item in summary) / len(summary)))
+
+
+def get_anomaly_reliability_pct() -> int:
+    transactions = _get_expense_transactions()
+    return _anomaly_reliability_pct(len(transactions), transactions)
+
+
+def _build_live_anomaly_model(transactions: list[dict]) -> IsolationForest | None:
+    if len(transactions) < MIN_TRANSACTIONS_FOR_LIVE_ANOMALY:
+        return None
+
+    model = IsolationForest(
+        contamination=ANOMALY_CONTAMINATION,
+        random_state=42,
+        n_estimators=LIVE_ANOMALY_TREES,
+    )
+    model.fit(_build_anomaly_features(transactions))
+    return model
+
+
 # =============================================================================
 # SECTION 4: TRAINING
 # The actual model training logic. This is where scikit-learn does its work.
@@ -451,13 +555,15 @@ def detect_anomalies(limit: int = 20) -> list[dict]:
 
     If no model is trained yet, returns an empty list.
     """
-    model: IsolationForest | None = _load_model("anomaly_detector")
-    if model is None:
-        return []
-
     transactions = _get_expense_transactions()
     if len(transactions) < 5:
         return []
+
+    model: IsolationForest | None = _load_model("anomaly_detector")
+    if model is None:
+        model = _build_live_anomaly_model(transactions)
+        if model is None:
+            return []
 
     X = _build_anomaly_features(transactions)
 
@@ -468,6 +574,7 @@ def detect_anomalies(limit: int = 20) -> list[dict]:
     # More negative = more isolated = more anomalous.
     scores = model.score_samples(X)
 
+    reliability_pct = _anomaly_reliability_pct(len(transactions), transactions)
     anomalies = []
     for i, (pred, score) in enumerate(zip(predictions, scores)):
         if pred == -1:   # flagged as anomaly
@@ -477,6 +584,7 @@ def detect_anomalies(limit: int = 20) -> list[dict]:
                 "category":      t["category"],
                 "txn_date":      t["txn_date"],
                 "anomaly_score": float(score),
+                "reliability_pct": reliability_pct,
             })
 
     # Sort by score ascending (most suspicious first)
@@ -529,30 +637,16 @@ def get_forecast_summary() -> list[dict]:
     trend: "up" / "down" / "stable" based on regression slope.
     """
     models: dict[str, LinearRegression] | None = _load_model("forecasters")
-    if not models:
-        return []
-
     predictions = forecast_next_month()
+    category_data = _get_monthly_category_totals()
     summary = []
 
-    for category, predicted in predictions.items():
-        model = models.get(category)
-        slope = float(model.coef_[0]) if model is not None else 0.0
-
-        # Classify trend based on slope magnitude
-        if slope > 50:
-            trend = "up"
-        elif slope < -50:
-            trend = "down"
-        else:
-            trend = "stable"
-
-        summary.append({
-            "category":         category,
-            "predicted_amount": predicted,
-            "trend":            trend,
-            "slope":            round(slope, 2),
-        })
+    for category, month_totals in category_data.items():
+        model = models.get(category) if models else None
+        live_item = _build_live_forecast(category, month_totals, model)
+        if category in predictions:
+            live_item["predicted_amount"] = predictions[category]
+        summary.append(live_item)
 
     # Sort by predicted amount descending (biggest spending first)
     summary.sort(key=lambda x: x["predicted_amount"], reverse=True)
@@ -578,7 +672,26 @@ def check_and_retrain() -> dict[str, str] | None:
       - No  → load existing models and serve predictions immediately
     """
     if is_retrain_due():
-        return train_all()
+        db_key = _db_training_key()
+        with _retrain_lock:
+            if db_key in _retraining_dbs:
+                return {"status": "training"}
+            _retraining_dbs.add(db_key)
+
+        def _run_background_retrain(training_key: str) -> None:
+            try:
+                train_all()
+            finally:
+                with _retrain_lock:
+                    _retraining_dbs.discard(training_key)
+
+        threading.Thread(
+            target=_run_background_retrain,
+            args=(db_key,),
+            daemon=True,
+            name=f"ml-retrain-{Path(db.DB_FILE).stem}",
+        ).start()
+        return {"status": "started"}
     return None
 
 

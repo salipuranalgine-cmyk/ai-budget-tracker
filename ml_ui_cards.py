@@ -73,6 +73,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
+import ml_engine
+
 
 # ── Shared palette (matches your existing dashboard palette) ──────────────────
 _PALETTE = [
@@ -85,6 +87,30 @@ _CARD_CONTENT_HEIGHT = 260  # matches dashboard_screen.py constant
 # =============================================================================
 # INTERNAL HELPERS
 # =============================================================================
+
+def _chart_theme(light_mode: bool) -> dict[str, str]:
+    if light_mode:
+        return {
+            "bg": "#f8fafc",
+            "text": "#0f172a",
+            "muted": "#64748b",
+            "grid": "#cbd5e1",
+        }
+    return {
+        "bg": "#0f172a",
+        "text": "#ffffff",
+        "muted": "#475569",
+        "grid": "#334155",
+    }
+
+
+def _chart_fig_width(viewport_width: float | None) -> float:
+    width = viewport_width or 900
+    cards_per_row = 1 if width < 640 else 2
+    usable_width = max(360, width - 72)
+    card_width = usable_width / cards_per_row
+    return min(9.6, max(5.4, card_width / 92))
+
 
 def _fig_to_b64(fig) -> str:
     """Convert a matplotlib figure to base64 PNG string for Flet Image."""
@@ -104,6 +130,7 @@ def _section_card(
     icon,
     accent_color: str,
     content: ft.Control,
+    header_action: ft.Control | None = None,
 ) -> ft.Control:
     """
     Matches the _section_card() helper in dashboard_screen.py exactly.
@@ -113,7 +140,7 @@ def _section_card(
         elevation=2,
         content=ft.Container(
             padding=ft.Padding(left=16, right=16, top=14, bottom=14),
-            border_radius=18,
+            border_radius=16,
             expand=True,
             gradient=ft.LinearGradient(
                 begin=ft.Alignment(-1, -1),
@@ -132,22 +159,29 @@ def _section_card(
                         spacing=10,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Container(
-                                width=34, height=34, border_radius=17,
-                                bgcolor=ft.Colors.with_opacity(0.14, accent_color),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(icon, size=18, color=accent_color),
-                            ),
-                            ft.Column(
-                                spacing=2, expand=True,
+                            ft.Row(
+                                spacing=10,
+                                expand=True,
                                 controls=[
-                                    ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
-                                    ft.Text(
-                                        subtitle, size=11,
-                                        color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                    ft.Container(
+                                        width=34, height=34, border_radius=17,
+                                        bgcolor=ft.Colors.with_opacity(0.14, accent_color),
+                                        alignment=ft.Alignment(0, 0),
+                                        content=ft.Icon(icon, size=18, color=accent_color),
+                                    ),
+                                    ft.Column(
+                                        spacing=2, expand=True,
+                                        controls=[
+                                            ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
+                                            ft.Text(
+                                                subtitle, size=11,
+                                                color=ft.Colors.with_opacity(0.48, ft.Colors.ON_SURFACE),
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
+                            *( [header_action] if header_action is not None else [] ),
                         ],
                     ),
                     content,
@@ -157,11 +191,41 @@ def _section_card(
     )
 
 
+def _reliability_badge(percent: int, accent_color: str) -> ft.Control:
+    tone = ft.Colors.GREEN_400 if percent >= 75 else ft.Colors.ORANGE_300 if percent >= 50 else ft.Colors.BLUE_300
+    return ft.Container(
+        padding=ft.Padding(left=10, right=10, top=5, bottom=5),
+        border_radius=999,
+        bgcolor=ft.Colors.with_opacity(0.14, accent_color),
+        border=ft.border.all(1, ft.Colors.with_opacity(0.22, accent_color)),
+        content=ft.Text(
+            f"Reliability {percent}%",
+            size=10,
+            weight=ft.FontWeight.BOLD,
+            color=tone,
+        ),
+    )
+
+
+def _merge_header_actions(primary: ft.Control | None, secondary: ft.Control | None) -> ft.Control | None:
+    actions = [action for action in [secondary, primary] if action is not None]
+    if not actions:
+        return None
+    if len(actions) == 1:
+        return actions[0]
+    return ft.Row(spacing=8, tight=True, controls=actions)
+
+
 # =============================================================================
 # CARD 1: SPENDING FORECAST
 # =============================================================================
 
-def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
+def _build_forecast_chart(
+    forecast_summary: list[dict],
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> str | None:
     """
     Build a horizontal bar chart of predicted next-month spending.
 
@@ -192,9 +256,11 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
     # Shorten long labels
     short_labels = [lb[:22] + "…" if len(lb) > 22 else lb for lb in labels]
 
-    bg = "#0f172a"
+    theme = _chart_theme(light_mode)
+    bg = theme["bg"]
+    fig_width = _chart_fig_width(viewport_width)
     fig, ax = plt.subplots(
-        figsize=(5.4, max(2.8, len(top) * 0.44)),
+        figsize=(fig_width, max(2.8, fig_width / 3.0, len(top) * 0.40)),
         facecolor=bg,
     )
     ax.set_facecolor(bg)
@@ -214,12 +280,12 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
         )
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(short_labels, color="#cbd5e1", fontsize=8.5)
+    ax.set_yticklabels(short_labels, color=theme["text"], fontsize=8.5)
     ax.invert_yaxis()
-    ax.tick_params(axis="x", colors="#475569", labelsize=7.5, length=0)
+    ax.tick_params(axis="x", colors=theme["muted"], labelsize=7.5, length=0)
     ax.tick_params(axis="y", length=0)
     ax.set_xlim(0, max_val * 1.35)
-    ax.grid(axis="x", alpha=0.10, color="#334155", linestyle="--")
+    ax.grid(axis="x", alpha=0.38 if light_mode else 0.10, color=theme["grid"], linestyle="--")
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -232,22 +298,31 @@ def _build_forecast_chart(forecast_summary: list[dict]) -> str | None:
     ]
     ax.legend(
         handles=legend_handles, loc="lower right",
-        frameon=False, fontsize=7, labelcolor="white",
+        frameon=False, fontsize=7, labelcolor=theme["text"],
         handlelength=1.0,
     )
 
     ax.set_title(
         "Predicted Spending — Next Month",
-        color="white", fontsize=11, fontweight="bold", pad=10,
+        color=theme["text"], fontsize=11, fontweight="bold", pad=10, x=0.35,
     )
-    fig.tight_layout(pad=1.2)
+    fig.subplots_adjust(left=0.22, right=0.86, top=0.84, bottom=0.10)
 
     b64 = _fig_to_b64(fig)
     plt.close(fig)
     return b64
 
 
-def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
+def build_ml_forecast_card(
+    forecast_summary: list[dict],
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+    expanded: bool = False,
+    content_height: int = _CARD_CONTENT_HEIGHT,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> ft.Control:
     """
     Build the "Next Month Forecast" section card for the dashboard.
 
@@ -258,10 +333,20 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
     If the model hasn't been trained yet (not enough data),
     shows a friendly "not enough data" placeholder instead.
     """
+    forecast_reliability = (
+        int(round(sum(int(item.get("reliability_pct", 0)) for item in forecast_summary) / len(forecast_summary)))
+        if forecast_summary else
+        ml_engine.get_forecast_reliability_pct()
+    )
+    header_content = _merge_header_actions(
+        header_action,
+        _reliability_badge(forecast_reliability, "#a78bfa") if forecast_reliability > 0 else None,
+    )
+
     # ── No model yet ──────────────────────────────────────────────────────────
     if not forecast_summary:
         empty_body = ft.Container(
-            height=_CARD_CONTENT_HEIGHT,
+            height=content_height,
             alignment=ft.Alignment(0, 0),
             content=ft.Column(
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -274,7 +359,7 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
                     ft.Text(
-                        "Keep logging expenses for 3+ months\nand the ML model will predict\nyour future spending here.",
+                        "Log some expenses first and this card will\nstart estimating from your current history.\nMore months = more reliable forecasts.",
                         size=11,
                         color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
@@ -284,14 +369,19 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
         )
         return _section_card(
             "Next Month Forecast",
-            "ML prediction — needs 3+ months of history",
+            "Live estimate warming up from your current spending history.",
             icon=ft.Icons.AUTO_GRAPH_ROUNDED,
             accent_color="#a78bfa",
             content=empty_body,
+            header_action=header_content,
         )
 
     # ── Chart ─────────────────────────────────────────────────────────────────
-    chart_b64 = _build_forecast_chart(forecast_summary)
+    chart_b64 = _build_forecast_chart(
+        forecast_summary,
+        light_mode=light_mode,
+        viewport_width=viewport_width,
+    )
 
     # ── Mini table below chart ────────────────────────────────────────────────
     # Show top 5 categories with trend arrows
@@ -340,41 +430,136 @@ def build_ml_forecast_card(forecast_summary: list[dict], peso_fn) -> ft.Control:
 
     body = ft.Column(
         spacing=10,
+        height=content_height,
         controls=[
-            # Chart
             ft.Container(
                 alignment=ft.Alignment(0, 0),
+                expand=True,
                 content=ft.Image(
                     src=f"data:image/png;base64,{chart_b64}",
                     fit=ft.BoxFit.FIT_WIDTH,
                     expand=True,
                 ) if chart_b64 else ft.Container(),
             ),
-            # Table header
-            ft.Row(controls=[
-                ft.Container(expand=5, content=ft.Text(
-                    "Category", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-                ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text(
-                    "Predicted", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-                ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text(
-                    "Trend", size=10, weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
-                )),
-            ]),
-            ft.Column(spacing=6, controls=table_rows),
         ],
     )
 
     return _section_card(
         "Next Month Forecast",
-        "LinearRegression prediction based on your spending history.",
+        f"Live estimate from your current spending history — reliability {forecast_reliability}%.",
         icon=ft.Icons.AUTO_GRAPH_ROUNDED,
         accent_color="#a78bfa",
         content=body,
+        header_action=header_content,
+    )
+
+
+def build_ml_forecast_expanded_card(
+    forecast_summary: list[dict],
+    peso_fn,
+    *,
+    light_mode: bool = False,
+    viewport_width: float | None = None,
+) -> ft.Control:
+    forecast_reliability = (
+        int(round(sum(int(item.get("reliability_pct", 0)) for item in forecast_summary) / len(forecast_summary)))
+        if forecast_summary else
+        ml_engine.get_forecast_reliability_pct()
+    )
+    header_content = _reliability_badge(forecast_reliability, "#a78bfa") if forecast_reliability > 0 else None
+
+    if not forecast_summary:
+        return build_ml_forecast_card(
+            forecast_summary,
+            peso_fn,
+            light_mode=light_mode,
+            viewport_width=viewport_width,
+        )
+
+    chart_b64 = _build_forecast_chart(
+        forecast_summary,
+        light_mode=light_mode,
+        viewport_width=viewport_width,
+    )
+    trend_icon = {"up": "â†‘", "down": "â†“", "stable": "â†’"}
+    trend_color = {
+        "up": ft.Colors.RED_300,
+        "down": ft.Colors.GREEN_300,
+        "stable": ft.Colors.BLUE_300,
+    }
+    table_rows: list[ft.Control] = []
+    for item in forecast_summary[:8]:
+        trend = item["trend"]
+        table_rows.append(
+            ft.Row(
+                controls=[
+                    ft.Container(
+                        expand=5,
+                        content=ft.Text(
+                            item["category"], size=11,
+                            weight=ft.FontWeight.W_500,
+                            max_lines=1,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ),
+                    ft.Container(
+                        expand=3,
+                        alignment=ft.Alignment(1, 0),
+                        content=ft.Text(
+                            peso_fn(item["predicted_amount"]),
+                            size=11, weight=ft.FontWeight.W_600,
+                        ),
+                    ),
+                    ft.Container(
+                        expand=2,
+                        alignment=ft.Alignment(1, 0),
+                        content=ft.Text(
+                            trend_icon.get(trend, "â†’"),
+                            size=13, weight=ft.FontWeight.BOLD,
+                            color=trend_color.get(trend, ft.Colors.BLUE_300),
+                        ),
+                    ),
+                ],
+            )
+        )
+
+    return _section_card(
+        "Next Month Forecast",
+        f"Live estimate from your current spending history â€” reliability {forecast_reliability}%.",
+        icon=ft.Icons.AUTO_GRAPH_ROUNDED,
+        accent_color="#a78bfa",
+        header_action=header_content,
+        content=ft.Column(
+            spacing=10,
+            expand=True,
+            controls=[
+                ft.Container(
+                    alignment=ft.Alignment(0, 0),
+                    expand=True,
+                    content=ft.Image(
+                        src=f"data:image/png;base64,{chart_b64}",
+                        fit=ft.BoxFit.FIT_WIDTH,
+                        expand=True,
+                    ) if chart_b64 else ft.Container(),
+                ),
+                ft.Divider(height=1, color=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE)),
+                ft.Row(controls=[
+                    ft.Container(expand=5, content=ft.Text(
+                        "Category", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                    ft.Container(expand=3, alignment=ft.Alignment(1, 0), content=ft.Text(
+                        "Predicted", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                    ft.Container(expand=2, alignment=ft.Alignment(1, 0), content=ft.Text(
+                        "Trend", size=10, weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
+                    )),
+                ]),
+                ft.Column(spacing=6, controls=table_rows, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+        ),
     )
 
 
@@ -403,7 +588,13 @@ def _suspicion_level(score: float) -> tuple[str, ft.Colors]:
         return "Low 🔵", ft.Colors.BLUE_300
 
 
-def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
+def build_ml_anomaly_card(
+    anomalies: list[dict],
+    peso_fn,
+    *,
+    header_action: ft.Control | None = None,
+    content_height: int = _CARD_CONTENT_HEIGHT,
+) -> ft.Control:
     """
     Build the "Flagged Transactions" section card for the dashboard.
 
@@ -419,6 +610,12 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
     If no anomalies were detected, shows a positive "all looks normal" message.
     If the model isn't trained yet, shows a placeholder.
     """
+    anomaly_reliability = (
+        int(anomalies[0].get("reliability_pct", 0))
+        if anomalies else
+        ml_engine.get_anomaly_reliability_pct()
+    )
+
     # ── Model not ready ───────────────────────────────────────────────────────
     if anomalies is None:
         # detect_anomalies() returns [] when model not ready — this branch
@@ -429,7 +626,6 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
     if not anomalies:
         # Two different messages depending on whether the model is trained
         try:
-            import ml_engine
             model_ready = ml_engine._model_path("anomaly_detector").exists()
         except Exception:
             model_ready = False
@@ -465,7 +661,7 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
                     ft.Text(
-                        f"Log at least 30 expense transactions\nand the model will learn what\n'normal' looks like for you.",
+                        "Keep logging expenses and the detector will\nlearn your normal patterns from current data.\nMore history = more reliable alerts.",
                         size=11,
                         color=ft.Colors.with_opacity(0.45, ft.Colors.ON_SURFACE),
                         text_align=ft.TextAlign.CENTER,
@@ -475,14 +671,15 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
 
         return _section_card(
             "Flagged Transactions",
-            "IsolationForest anomaly detection",
+            f"IsolationForest scan warming up — reliability {anomaly_reliability}%.",
             icon=ft.Icons.POLICY_ROUNDED,
             accent_color="#f472b6",
             content=ft.Container(
-                height=_CARD_CONTENT_HEIGHT,
+                height=content_height,
                 alignment=ft.Alignment(0, 0),
                 content=body_content,
             ),
+            header_action=header_action,
         )
 
     # ── Anomalies found — build table ─────────────────────────────────────────
@@ -520,7 +717,7 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
             ft.Container(
                 padding=ft.Padding(left=10, right=10, top=9, bottom=9),
                 border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE),
                 content=ft.Row(controls=[
                     ft.Container(expand=2, content=ft.Text(
                         date_str, size=11,
@@ -545,14 +742,17 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
 
     body = ft.Column(
         spacing=0,
+        height=content_height,
         controls=[
             ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 controls=[
                     ft.Text(
                         f"⚠️ {len(anomalies)} unusual transaction(s) found",
                         size=12,
                         color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
                     ),
+                    _reliability_badge(anomaly_reliability, "#f472b6"),
                 ],
             ),
             ft.Container(height=8),
@@ -561,7 +761,7 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
             ft.Column(
                 spacing=6,
                 scroll=ft.ScrollMode.AUTO,
-                height=_CARD_CONTENT_HEIGHT - 44,
+                height=max(120, content_height - 72),
                 controls=table_rows,
             ),
         ],
@@ -569,8 +769,9 @@ def build_ml_anomaly_card(anomalies: list[dict], peso_fn) -> ft.Control:
 
     return _section_card(
         "Flagged Transactions",
-        "IsolationForest anomaly detection — sorted by suspicion level.",
+        f"IsolationForest scan of your current history — reliability {anomaly_reliability}%.",
         icon=ft.Icons.POLICY_ROUNDED,
         accent_color="#f472b6",
         content=body,
+        header_action=header_action,
     )
