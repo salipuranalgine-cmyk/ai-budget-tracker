@@ -1,5 +1,7 @@
 from __future__ import annotations
+from ml_ui_cards import build_ml_forecast_card, build_ml_anomaly_card
 
+import ml_engine
 import asyncio
 import base64
 import threading
@@ -1240,6 +1242,9 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     month = now_month()
     today = date.today()
     balance = db.get_balance()
+    ml_engine.check_and_retrain()          # retrain if schedule says it's time
+    ml_forecast = ml_engine.get_forecast_summary()
+    ml_anomalies = ml_engine.detect_anomalies()
     expense_map = db.get_month_expense_summary(month)
     month_total = sum(expense_map.values())
     month_income = db.get_month_income_total(month)
@@ -1797,6 +1802,21 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 ),
             ],
         ),
+        
+        # Add your ML cards here
+        ft.ResponsiveRow(
+            controls=[
+                ft.Container(
+                    col={"xs": 12, "md": 6},
+                    content=build_ml_forecast_card(ml_forecast, peso),
+                ),
+                ft.Container(
+                    col={"xs": 12, "md": 6},
+                    content=build_ml_anomaly_card(ml_anomalies, peso),
+                ),
+            ],
+        ),
+
         ft.ResponsiveRow(
             controls=[
                 ft.Container(

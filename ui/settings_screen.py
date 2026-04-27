@@ -6,6 +6,7 @@ from pathlib import Path
 import flet as ft
 
 import database as db
+import ml_engine
 from ui.constants import CURRENCY_LABELS
 
 
@@ -13,6 +14,12 @@ AI_MODE_LABELS = {
     "smart": "Smart (recommended for slower PCs)",
     "online_first": "Online first (fastest if API key is saved)",
     "offline_first": "Offline first (private, but slower on weak PCs)",
+}
+
+ML_SCHEDULE_LABELS = {
+    "daily":   "Daily — retrain every day (best if you log many transactions)",
+    "weekly":  "Weekly — retrain every 7 days (recommended for most users)",
+    "monthly": "Monthly — retrain once a month (light usage / older hardware)",
 }
 
 MASK_PREFIX = "*" * 18
@@ -91,8 +98,339 @@ def _info_card(
     )
 
 
+def _status_row(label: str, value: str, value_color=None) -> ft.Control:
+    """A simple label: value row used inside the ML status dialog."""
+    return ft.Row(
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        controls=[
+            ft.Text(
+                label, size=12,
+                color=ft.Colors.with_opacity(0.60, ft.Colors.ON_SURFACE),
+            ),
+            ft.Text(
+                value, size=12,
+                weight=ft.FontWeight.W_600,
+                color=value_color or ft.Colors.WHITE,
+            ),
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
-# AI Guide dialog
+# ML Status dialog
+# This is the "face" for scikit-learn — shows the user exactly what's
+# happening with their ML models, whether they're trained or not, and
+# lets them retrain manually.
+# ---------------------------------------------------------------------------
+
+def _show_ml_status_dialog(page: ft.Page) -> None:
+    """
+    Opens a dialog showing the full status of the scikit-learn ML engine.
+    Think of it like a health dashboard for the ML layer.
+
+    WHAT IS SHOWN:
+    ─────────────
+    • Anomaly Detector status  (IsolationForest — finds unusual transactions)
+    • Spending Forecaster status (LinearRegression — predicts next month)
+    • Last retrain date
+    • Next retrain date based on schedule
+    • How many expense transactions exist
+    • How many months of history exist
+    • What's still needed to enable each model
+    • A "Retrain Now" button for immediate manual retraining
+    """
+
+    # Mutable container so we can update the dialog content after retraining
+    status_col = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO)
+    retrain_status_text = ft.Text(
+        "", size=12,
+        color=ft.Colors.GREEN_400,
+        visible=False,
+    )
+    retrain_btn = ft.ElevatedButton(
+        "Retrain Now",
+        icon=ft.Icons.REFRESH,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.PURPLE_700,
+            color=ft.Colors.WHITE,
+        ),
+    )
+
+    def _build_status_content():
+        """Pull fresh status from ml_engine and rebuild the column."""
+        status_col.controls.clear()
+        s = ml_engine.get_ml_status()
+
+        # ── MODEL READINESS SECTION ──────────────────────────────────────────
+        def _model_badge(ready: bool) -> ft.Control:
+            if ready:
+                return ft.Container(
+                    padding=ft.Padding(8, 3, 8, 3),
+                    border_radius=8,
+                    bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.GREEN_400),
+                    content=ft.Text("✅ Trained & Ready", size=11, color=ft.Colors.GREEN_300),
+                )
+            return ft.Container(
+                padding=ft.Padding(8, 3, 8, 3),
+                border_radius=8,
+                bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.ORANGE_400),
+                content=ft.Text("⏳ Not trained yet", size=11, color=ft.Colors.ORANGE_300),
+            )
+
+        status_col.controls.append(
+            ft.Container(
+                padding=12,
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                content=ft.Column(spacing=12, controls=[
+
+                    # Anomaly Detector
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(spacing=8, controls=[
+                                ft.Icon(ft.Icons.POLICY_ROUNDED, size=16,
+                                        color=ft.Colors.PINK_300),
+                                ft.Column(spacing=2, controls=[
+                                    ft.Text("Anomaly Detector", size=13,
+                                            weight=ft.FontWeight.BOLD),
+                                    ft.Text("IsolationForest · flags unusual transactions",
+                                            size=10,
+                                            color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
+                                ]),
+                            ]),
+                            _model_badge(s["anomaly_model_ready"]),
+                        ],
+                    ),
+
+                    # Forecaster
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(spacing=8, controls=[
+                                ft.Icon(ft.Icons.AUTO_GRAPH_ROUNDED, size=16,
+                                        color=ft.Colors.PURPLE_300),
+                                ft.Column(spacing=2, controls=[
+                                    ft.Text("Spending Forecaster", size=13,
+                                            weight=ft.FontWeight.BOLD),
+                                    ft.Text("LinearRegression · predicts next month",
+                                            size=10,
+                                            color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
+                                ]),
+                            ]),
+                            _model_badge(s["forecast_model_ready"]),
+                        ],
+                    ),
+                ]),
+            )
+        )
+
+        # ── DATA SNAPSHOT ────────────────────────────────────────────────────
+        status_col.controls.append(
+            ft.Container(
+                padding=12,
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                content=ft.Column(spacing=8, controls=[
+                    ft.Text("Your Data Snapshot", size=12,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE)),
+                    _status_row(
+                        "Expense transactions",
+                        str(s["transaction_count"]),
+                        ft.Colors.CYAN_300 if s["transaction_count"] >= 30
+                        else ft.Colors.ORANGE_300,
+                    ),
+                    _status_row(
+                        "Months of history",
+                        str(s["months_of_data"]),
+                        ft.Colors.CYAN_300 if s["months_of_data"] >= 3
+                        else ft.Colors.ORANGE_300,
+                    ),
+                ]),
+            )
+        )
+
+        # ── WHAT IS STILL NEEDED ─────────────────────────────────────────────
+        needs: list[str] = []
+        if s["transaction_count"] < 30:
+            remaining = 30 - s["transaction_count"]
+            needs.append(
+                f"• Anomaly detector needs {remaining} more expense transaction(s) "
+                f"(minimum 30 to define what 'normal' looks like for you)."
+            )
+        if s["months_of_data"] < 3:
+            remaining = 3 - s["months_of_data"]
+            needs.append(
+                f"• Forecaster needs {remaining} more month(s) of history "
+                f"(minimum 3 months to draw a reliable trend line)."
+            )
+
+        if needs:
+            status_col.controls.append(
+                ft.Container(
+                    padding=12,
+                    border_radius=10,
+                    bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ORANGE_400),
+                    border=ft.border.all(1, ft.Colors.with_opacity(0.20, ft.Colors.ORANGE_400)),
+                    content=ft.Column(
+                        spacing=6,
+                        controls=[
+                            ft.Row(spacing=6, controls=[
+                                ft.Icon(ft.Icons.INFO_OUTLINE, size=14,
+                                        color=ft.Colors.ORANGE_300),
+                                ft.Text("What's still needed", size=12,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=ft.Colors.ORANGE_300),
+                            ]),
+                            *[ft.Text(n, size=11,
+                                      color=ft.Colors.with_opacity(0.75, ft.Colors.ON_SURFACE))
+                              for n in needs],
+                        ],
+                    ),
+                )
+            )
+        else:
+            status_col.controls.append(
+                ft.Container(
+                    padding=12,
+                    border_radius=10,
+                    bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.GREEN_400),
+                    content=ft.Row(spacing=8, controls=[
+                        ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=14,
+                                color=ft.Colors.GREEN_300),
+                        ft.Text("You have enough data for both models to train!",
+                                size=12, color=ft.Colors.GREEN_300),
+                    ]),
+                )
+            )
+
+        # ── RETRAIN SCHEDULE TIMING ──────────────────────────────────────────
+        status_col.controls.append(
+            ft.Container(
+                padding=12,
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                content=ft.Column(spacing=8, controls=[
+                    ft.Text("Retrain Schedule", size=12,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE)),
+                    _status_row("Schedule",    s["schedule"]),
+                    _status_row("Last retrain", s["last_retrain"]),
+                    _status_row("Next retrain", s["next_retrain"],
+                                ft.Colors.GREEN_300
+                                if s["next_retrain"] == "Due now"
+                                else None),
+                ]),
+            )
+        )
+
+        # ── WHAT SCIKIT-LEARN ACTUALLY IS ────────────────────────────────────
+        # Educational explainer for juniors and curious users
+        status_col.controls.append(
+            ft.Container(
+                padding=12,
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                content=ft.Column(spacing=8, controls=[
+                    ft.Row(spacing=6, controls=[
+                        ft.Text("🧠", size=14),
+                        ft.Text("What is scikit-learn?", size=12,
+                                weight=ft.FontWeight.BOLD),
+                    ]),
+                    ft.Text(
+                        "scikit-learn is a Python machine learning library. "
+                        "This app uses two of its models:\n\n"
+                        "• IsolationForest — learns what a normal transaction looks "
+                        "like for YOU, then flags anything that doesn't fit.\n\n"
+                        "• LinearRegression — draws a trend line through your monthly "
+                        "spending history and extends it forward to predict next month.\n\n"
+                        "Both models run 100% locally on your device — "
+                        "no data is ever sent anywhere.",
+                        size=11,
+                        color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE),
+                    ),
+                ]),
+            )
+        )
+
+    def _do_retrain(_):
+        """Trigger an immediate retrain and refresh the dialog."""
+        retrain_btn.disabled = True
+        retrain_btn.text = "Training…"
+        retrain_status_text.visible = False
+        page.update()
+
+        try:
+            results = ml_engine.train_all()
+            anomaly_msg  = results.get("anomaly", "")
+            forecast_msg = results.get("forecaster", "")
+            retrain_status_text.value = f"Done!\n• {anomaly_msg}\n• {forecast_msg}"
+            retrain_status_text.color = ft.Colors.GREEN_400
+        except Exception as exc:
+            retrain_status_text.value = f"Error: {exc}"
+            retrain_status_text.color = ft.Colors.RED_400
+
+        retrain_status_text.visible = True
+        retrain_btn.disabled = False
+        retrain_btn.text = "Retrain Now"
+        _build_status_content()   # refresh the status numbers
+        page.update()
+
+    retrain_btn.on_click = _do_retrain
+    _build_status_content()
+
+    dlg = ft.AlertDialog(
+        modal=True,
+        title=ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[
+                ft.Row(spacing=8, controls=[
+                    ft.Icon(ft.Icons.PSYCHOLOGY_ROUNDED, color=ft.Colors.PURPLE_300),
+                    ft.Text("ML Engine Status", weight=ft.FontWeight.BOLD, size=16),
+                    ft.Container(
+                        padding=ft.Padding(6, 2, 6, 2),
+                        border_radius=8,
+                        bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.PURPLE_400),
+                        content=ft.Text("scikit-learn", size=10,
+                                        color=ft.Colors.PURPLE_300),
+                    ),
+                ]),
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_size=20,
+                    on_click=lambda _: _close_dialog(page, dlg),
+                ),
+            ],
+        ),
+        content=ft.Container(
+            width=520,
+            height=540,
+            content=ft.Column(
+                spacing=12,
+                expand=True,
+                controls=[
+                    ft.Container(expand=True, content=status_col),
+                    ft.Divider(height=1),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            retrain_status_text,
+                            retrain_btn,
+                        ],
+                    ),
+                ],
+            ),
+        ),
+        actions=[],
+    )
+
+    _open_dialog(page, dlg)
+
+
+# ---------------------------------------------------------------------------
+# AI Guide dialog (unchanged)
 # ---------------------------------------------------------------------------
 
 def _show_ai_guide(page: ft.Page) -> None:
@@ -306,6 +644,32 @@ def settings_screen(page: ft.Page) -> ft.Control:
         toast("AI response mode saved. It will apply on your next AI question.")
         page.update()
 
+    # ── ML Schedule controls ─────────────────────────────────────────────────
+    current_schedule = ml_engine.get_retrain_schedule()
+    ml_schedule_dd = ft.Dropdown(
+        label="Retrain schedule",
+        value=current_schedule,
+        options=[
+            ft.dropdown.Option(code, label)
+            for code, label in ML_SCHEDULE_LABELS.items()
+        ],
+        width=420,
+    )
+    ml_schedule_status = ft.Text(
+        f"Currently: {ML_SCHEDULE_LABELS.get(current_schedule, current_schedule)}",
+        size=12,
+        color=ft.Colors.with_opacity(0.60, ft.Colors.ON_SURFACE),
+    )
+
+    def save_ml_schedule(_) -> None:
+        schedule = ml_schedule_dd.value or "weekly"
+        ml_engine.set_retrain_schedule(schedule)
+        ml_schedule_status.value = f"Saved. {ML_SCHEDULE_LABELS.get(schedule, schedule)}"
+        ml_schedule_status.color = ft.Colors.GREEN_400
+        toast("ML retrain schedule saved.")
+        page.update()
+
+    # ── Currency controls ────────────────────────────────────────────────────
     current_currency = db.get_currency()
     currency_dd = ft.Dropdown(
         label="Select currency",
@@ -330,11 +694,19 @@ def settings_screen(page: ft.Page) -> ft.Control:
         toast(f"Currency changed to {code}. Switch tabs or restart the app if needed.")
         page.update()
 
+    # ── Quick ML status badge (shown in the card header) ─────────────────────
+    ml_status_summary = ml_engine.get_ml_status()
+    both_ready = ml_status_summary["anomaly_model_ready"] and ml_status_summary["forecast_model_ready"]
+    ml_badge_text = "Both models ready" if both_ready else "Not trained yet"
+    ml_badge_color = ft.Colors.GREEN_400 if both_ready else ft.Colors.ORANGE_400
+
     return ft.Column(
         expand=True,
         scroll=ft.ScrollMode.AUTO,
         spacing=12,
         controls=[
+
+            # ── AI SETUP CARD ────────────────────────────────────────────────
             ft.Card(
                 content=ft.Container(
                     padding=14,
@@ -467,6 +839,177 @@ def settings_screen(page: ft.Page) -> ft.Control:
                     ),
                 )
             ),
+
+            # ── ML SMART ANALYSIS CARD ───────────────────────────────────────
+            # This card lives right after AI Setup since they're both ML features.
+            # It lets the user control the retrain schedule and open the status dialog.
+            ft.Card(
+                content=ft.Container(
+                    padding=14,
+                    content=ft.Column(
+                        spacing=12,
+                        controls=[
+                            # Header row: title + status badge + View Status button
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    ft.Row(
+                                        spacing=8,
+                                        controls=[
+                                            ft.Icon(ft.Icons.PSYCHOLOGY_ROUNDED,
+                                                    color=ft.Colors.PURPLE_300),
+                                            ft.Text("ML Smart Analysis",
+                                                    weight=ft.FontWeight.BOLD, size=16),
+                                            ft.Container(
+                                                padding=ft.Padding(6, 2, 6, 2),
+                                                border_radius=8,
+                                                bgcolor=ft.Colors.with_opacity(
+                                                    0.18, ml_badge_color),
+                                                content=ft.Text(
+                                                    ml_badge_text, size=10,
+                                                    color=ml_badge_color,
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                    # "View ML Status" button — your requested button
+                                    ft.OutlinedButton(
+                                        "View ML Status",
+                                        icon=ft.Icons.MONITOR_HEART_ROUNDED,
+                                        on_click=lambda _: _show_ml_status_dialog(page),
+                                        style=ft.ButtonStyle(
+                                            side=ft.BorderSide(
+                                                1, ft.Colors.with_opacity(0.35, ft.Colors.PURPLE_300)
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            ),
+
+                            ft.Text(
+                                "scikit-learn powers two local ML models that run on YOUR device. "
+                                "They learn from your own spending history — no internet needed.",
+                                size=12,
+                                color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+                            ),
+
+                            ft.Divider(height=1),
+
+                            # Two model descriptions
+                            ft.Row(
+                                spacing=10,
+                                controls=[
+                                    ft.Expanded(
+                                        content=_info_card(
+                                            ft.Icons.POLICY_ROUNDED,
+                                            ft.Colors.PINK_300,
+                                            "Anomaly Detector",
+                                            "Flags transactions that look unusual compared to your normal spending patterns.",
+                                            badge_text="IsolationForest",
+                                            badge_color=ft.Colors.PINK_300,
+                                        ),
+                                    ),
+                                    ft.Expanded(
+                                        content=_info_card(
+                                            ft.Icons.AUTO_GRAPH_ROUNDED,
+                                            ft.Colors.PURPLE_300,
+                                            "Spending Forecaster",
+                                            "Predicts next month's spending per category using your historical trends.",
+                                            badge_text="LinearRegression",
+                                            badge_color=ft.Colors.PURPLE_300,
+                                        ),
+                                    ),
+                                ],
+                            ),
+
+                            # Retrain schedule dropdown
+                            ft.Container(
+                                padding=10,
+                                border_radius=8,
+                                bgcolor=ft.Colors.with_opacity(0.07, ft.Colors.ON_SURFACE),
+                                content=ft.Column(
+                                    spacing=8,
+                                    controls=[
+                                        ft.Row(spacing=8, controls=[
+                                            ft.Icon(ft.Icons.SCHEDULE, size=16,
+                                                    color=ft.Colors.PURPLE_300),
+                                            ft.Text("Auto-Retrain Schedule",
+                                                    weight=ft.FontWeight.BOLD, size=13),
+                                        ]),
+                                        ft.Text(
+                                            "How often should the app retrain models with new data? "
+                                            "Retraining happens automatically on app startup when the schedule is due.",
+                                            size=12,
+                                            color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE),
+                                        ),
+                                        ml_schedule_dd,
+                                        ft.Row(
+                                            spacing=8,
+                                            controls=[
+                                                ft.ElevatedButton(
+                                                    "Save Schedule",
+                                                    icon=ft.Icons.SAVE,
+                                                    on_click=save_ml_schedule,
+                                                    style=ft.ButtonStyle(
+                                                        bgcolor=ft.Colors.PURPLE_700,
+                                                        color=ft.Colors.WHITE,
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                        ml_schedule_status,
+                                    ],
+                                ),
+                            ),
+
+                            # Last retrain + next retrain quick info
+                            ft.Row(
+                                spacing=10,
+                                controls=[
+                                    ft.Container(
+                                        expand=True,
+                                        padding=ft.Padding(10, 8, 10, 8),
+                                        border_radius=8,
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        content=ft.Column(spacing=3, controls=[
+                                            ft.Text("Last retrain", size=10,
+                                                    color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
+                                            ft.Text(ml_status_summary["last_retrain"],
+                                                    size=12, weight=ft.FontWeight.BOLD),
+                                        ]),
+                                    ),
+                                    ft.Container(
+                                        expand=True,
+                                        padding=ft.Padding(10, 8, 10, 8),
+                                        border_radius=8,
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        content=ft.Column(spacing=3, controls=[
+                                            ft.Text("Next retrain", size=10,
+                                                    color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
+                                            ft.Text(ml_status_summary["next_retrain"],
+                                                    size=12, weight=ft.FontWeight.BOLD),
+                                        ]),
+                                    ),
+                                    ft.Container(
+                                        expand=True,
+                                        padding=ft.Padding(10, 8, 10, 8),
+                                        border_radius=8,
+                                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
+                                        content=ft.Column(spacing=3, controls=[
+                                            ft.Text("Transactions", size=10,
+                                                    color=ft.Colors.with_opacity(0.50, ft.Colors.ON_SURFACE)),
+                                            ft.Text(str(ml_status_summary["transaction_count"]),
+                                                    size=12, weight=ft.FontWeight.BOLD),
+                                        ]),
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                )
+            ),
+
+            # ── CURRENCY CARD ────────────────────────────────────────────────
             ft.Card(
                 content=ft.Container(
                     padding=14,
@@ -500,6 +1043,8 @@ def settings_screen(page: ft.Page) -> ft.Control:
                     ),
                 )
             ),
+
+            # ── EXPORT CARD ──────────────────────────────────────────────────
             ft.Card(
                 content=ft.Container(
                     padding=14,
@@ -531,6 +1076,8 @@ def settings_screen(page: ft.Page) -> ft.Control:
                     ),
                 )
             ),
+
+            # ── PRIVACY CARD ─────────────────────────────────────────────────
             ft.Card(
                 content=ft.Container(
                     padding=14,
@@ -545,7 +1092,10 @@ def settings_screen(page: ft.Page) -> ft.Control:
                                 ],
                             ),
                             ft.Text(
-                                "Your budget data stays in local SQLite files on this device. If you use cloud AI, only the prompt you send to the model goes over the internet.",
+                                "Your budget data stays in local SQLite files on this device. "
+                                "ML models (scikit-learn) also run fully locally — your spending "
+                                "history is never sent anywhere for ML processing. "
+                                "If you use cloud AI, only the prompt you send to the model goes over the internet.",
                                 size=12,
                                 color=ft.Colors.with_opacity(0.60, ft.Colors.ON_SURFACE),
                             ),
