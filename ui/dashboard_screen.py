@@ -53,6 +53,8 @@ def _parse_notify_tag(reply: str) -> tuple[str, str | None, str | None]:
 
 _PALETTE = ["#38bdf8", "#818cf8", "#fb923c", "#34d399", "#f472b6",
             "#fbbf24", "#a78bfa", "#22d3ee", "#4ade80", "#f87171"]
+_HOVER_ANIMATION = ft.Animation(180, ft.AnimationCurve.EASE_OUT)
+_SWAP_ANIMATION = ft.Animation(260, ft.AnimationCurve.EASE_IN_OUT_CUBIC)
 
 
 def _fig_to_b64(fig) -> str:
@@ -1132,10 +1134,15 @@ def _chart_card(
         content=(
             ft.Container(
                 height=image_height,
+                padding=ft.Padding(left=6, right=6, top=6, bottom=6),
                 alignment=ft.Alignment(0, 0),
+                border_radius=16,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                border=ft.border.all(1, ft.Colors.with_opacity(0.08, accent_color)),
                 content=ft.Image(
                     src=f"data:image/png;base64,{b64}",
-                    fit=ft.BoxFit.FIT_WIDTH,
+                    fit=ft.BoxFit.FILL,
                     expand=True,
                 ),
             )
@@ -1165,6 +1172,21 @@ _DEFAULT_DASHBOARD_MODULE_ORDER = [
     "ml_anomalies",
     "cashflow_table",
 ]
+
+
+def _dashboard_content_height(viewport_width: float | None) -> int:
+    width = viewport_width or 0
+    if width >= 1750:
+        return 340
+    if width >= 1450:
+        return 312
+    if width >= 1200:
+        return 286
+    return 260
+
+
+def _dashboard_cards_per_row(viewport_width: float | None) -> int:
+    return 1 if (viewport_width or 0) < 640 else 2
 
 
 def _load_dashboard_module_order() -> list[str]:
@@ -1318,6 +1340,9 @@ def _cashflow_table_card(
 
 
 def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
+    global _CARD_CONTENT_HEIGHT
+    _CARD_CONTENT_HEIGHT = _dashboard_content_height(page.width)
+
     db.init_chat_tables()
 
     currency_code = db.get_currency()
@@ -1851,9 +1876,71 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     # ── ASSEMBLE DASHBOARD ───────────────────────────────────────────────────
     module_order = _load_dashboard_module_order()
     module_grid = ft.ResponsiveRow(spacing=12, run_spacing=12)
+    module_shell_refs: dict[str, ft.Ref[ft.Container]] = {}
+    module_surface_refs: dict[str, ft.Ref[ft.Container]] = {}
+    drag_state = {"active_id": None}
 
     def _persist_dashboard_order() -> None:
         db.set_app_meta(_DASHBOARD_ORDER_KEY, json.dumps(module_order))
+
+    def _refresh_module_surface(module_id: str, *, hovered: bool = False, drop_target: bool = False) -> None:
+        surface = module_surface_refs.get(module_id)
+        if surface is None or surface.current is None:
+            return
+
+        accent = "#38bdf8" if drop_target else "#7dd3fc"
+        surface.current.scale = ft.Scale(1.012 if hovered or drop_target else 1.0)
+        surface.current.border = ft.border.all(
+            1.6 if hovered or drop_target else 1,
+            ft.Colors.with_opacity(0.34 if hovered or drop_target else 0.0, accent),
+        )
+        surface.current.gradient = ft.LinearGradient(
+            begin=ft.Alignment(-1, -1),
+            end=ft.Alignment(1, 1),
+            colors=[
+                ft.Colors.with_opacity(0.14 if hovered or drop_target else 0.0, accent),
+                ft.Colors.with_opacity(0.03 if hovered or drop_target else 0.0, ft.Colors.WHITE),
+            ],
+        )
+        surface.current.shadow = [
+            ft.BoxShadow(
+                blur_radius=20 if drop_target else 16,
+                spread_radius=0.5 if hovered or drop_target else 0,
+                color=ft.Colors.with_opacity(0.18 if hovered or drop_target else 0.0, accent),
+                offset=ft.Offset(0, 8 if hovered or drop_target else 0),
+            )
+        ]
+
+    def _queue_surface_refresh(module_id: str, *, hovered: bool = False, drop_target: bool = False) -> None:
+        _refresh_module_surface(module_id, hovered=hovered, drop_target=drop_target)
+        page.update()
+
+    async def _animate_module_swap(source_id: str, target_id: str, source_index: int, target_index: int) -> None:
+        source_shell = module_shell_refs.get(source_id)
+        target_shell = module_shell_refs.get(target_id)
+        if source_shell is None or target_shell is None:
+            return
+        if source_shell.current is None or target_shell.current is None:
+            return
+
+        cards_per_row = _dashboard_cards_per_row(page.width)
+        source_row, source_col = divmod(source_index, cards_per_row)
+        target_row, target_col = divmod(target_index, cards_per_row)
+        source_offset = ft.Offset(source_col - target_col, source_row - target_row)
+        target_offset = ft.Offset(target_col - source_col, target_row - source_row)
+
+        source_shell.current.offset = source_offset
+        target_shell.current.offset = target_offset
+        source_shell.current.scale = ft.Scale(1.018)
+        target_shell.current.scale = ft.Scale(1.018)
+        page.update()
+        await asyncio.sleep(0.02)
+
+        source_shell.current.offset = ft.Offset(0, 0)
+        target_shell.current.offset = ft.Offset(0, 0)
+        source_shell.current.scale = ft.Scale(1.0)
+        target_shell.current.scale = ft.Scale(1.0)
+        page.update()
 
     def _drag_handle(module_id: str) -> ft.Control:
         return ft.Container(
@@ -1887,30 +1974,84 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         )
         module_grid.controls = [dashboard_modules[module_id] for module_id in module_order]
         _persist_dashboard_order()
+        drag_state["active_id"] = None
+        _refresh_module_surface(source_id)
+        _refresh_module_surface(target_id)
         page.update()
+        page.run_task(_animate_module_swap, source_id, target_id, source_index, target_index)
+
+    def _on_drag_start(module_id: str) -> None:
+        drag_state["active_id"] = module_id
+        _queue_surface_refresh(module_id)
+
+    def _on_drag_complete(module_id: str) -> None:
+        drag_state["active_id"] = None
+        _queue_surface_refresh(module_id)
+
+    def _on_module_hover(e, module_id: str) -> None:
+        if drag_state["active_id"] == module_id:
+            return
+        _queue_surface_refresh(module_id, hovered=e.data == "true")
+
+    def _on_module_will_accept(e, module_id: str) -> None:
+        source_id = getattr(getattr(e, "src", None), "data", None)
+        should_highlight = bool(getattr(e, "accept", False)) and source_id != module_id
+        _queue_surface_refresh(module_id, drop_target=should_highlight)
+
+    def _on_module_leave(module_id: str) -> None:
+        _queue_surface_refresh(module_id)
 
     def _wrap_dashboard_module(module_id: str, col_spec: dict[str, int], builder, feedback_width: int = 420) -> ft.Control:
+        shell_ref = ft.Ref[ft.Container]()
+        surface_ref = ft.Ref[ft.Container]()
+        module_shell_refs[module_id] = shell_ref
+        module_surface_refs[module_id] = surface_ref
         live_content = builder(_drag_handle(module_id))
         feedback_content = builder(None)
         return ft.Container(
+            ref=shell_ref,
             col=col_spec,
-            content=ft.DragTarget(
-                group="dashboard-module",
-                on_accept=lambda e, target=module_id: _on_module_drop(e, target),
-                content=ft.Draggable(
+            offset=ft.Offset(0, 0),
+            scale=ft.Scale(1.0),
+            animate_offset=_SWAP_ANIMATION,
+            animate_scale=_SWAP_ANIMATION,
+            content=ft.Container(
+                ref=surface_ref,
+                border_radius=22,
+                padding=2,
+                scale=ft.Scale(1.0),
+                animate=_HOVER_ANIMATION,
+                animate_scale=_HOVER_ANIMATION,
+                on_hover=lambda e, module=module_id: _on_module_hover(e, module),
+                content=ft.DragTarget(
                     group="dashboard-module",
-                    data=module_id,
-                    content=live_content,
-                    content_feedback=ft.Container(
-                        width=feedback_width,
-                        padding=8,
-                        content=feedback_content,
-                    ),
-                    content_when_dragging=ft.Container(
-                        border_radius=16,
-                        bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
-                        border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)),
-                        height=_CARD_CONTENT_HEIGHT + 74,
+                    on_will_accept=lambda e, target=module_id: _on_module_will_accept(e, target),
+                    on_leave=lambda e, target=module_id: _on_module_leave(target),
+                    on_accept=lambda e, target=module_id: _on_module_drop(e, target),
+                    content=ft.Draggable(
+                        group="dashboard-module",
+                        data=module_id,
+                        on_drag_start=lambda e, module=module_id: _on_drag_start(module),
+                        on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
+                        content=live_content,
+                        content_feedback=ft.Container(
+                            width=feedback_width,
+                            padding=8,
+                            scale=ft.Scale(1.015),
+                            shadow=ft.BoxShadow(
+                                blur_radius=24,
+                                spread_radius=1,
+                                color=ft.Colors.with_opacity(0.18, "#38bdf8"),
+                                offset=ft.Offset(0, 12),
+                            ),
+                            content=feedback_content,
+                        ),
+                        content_when_dragging=ft.Container(
+                            border_radius=16,
+                            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.ON_SURFACE),
+                            border=ft.border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)),
+                            height=_CARD_CONTENT_HEIGHT + 74,
+                        ),
                     ),
                 ),
             ),
