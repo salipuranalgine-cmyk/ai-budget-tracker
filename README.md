@@ -1,6 +1,6 @@
 # 💰 AI Smart Saver — Budget Guardian
 
-A personal budget tracking desktop app built with **Python + Flet**, featuring AI-powered multi-turn chat, a full notification hub, recurring transaction automation, multi-currency support, and a clean dark/light UI.
+A personal budget tracking desktop app built with **Python + Flet**, featuring AI-powered multi-turn chat, a scikit-learn ML engine for anomaly detection and spending forecasts, drag-and-drop dashboard cards, a full notification hub, recurring transaction automation, multi-currency support, and a clean dark/light UI.
 
 ---
 
@@ -17,6 +17,9 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 - Starting balance support — set your initial cash before tracking begins
 - Upcoming recurring bills widget (due within the next few days)
 - Quick **+ Income** and **+ Expense** action buttons
+- **Drag-and-drop card reordering** — rearrange every dashboard module to match your workflow; the order is saved per user and restored on next launch
+- **Clickable / expandable cards** — tap any card header to expand it for a deeper view
+- Smooth animated card swaps (ease-out cubic transitions)
 
 ### 🧾 Transactions
 - Log income and expenses with category tagging, description, and custom date
@@ -56,6 +59,30 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 - AI automatically generates urgent notifications when it detects budget overruns, low balance, or overdue bills via a structured `[NOTIFY: ...]` tag in its reply
 - Fallback keyword scanner for urgent alerts when structured tags aren't present
 
+### 🧠 ML Engine (scikit-learn)
+Budget Guardian includes a lightweight but real machine learning layer powered by scikit-learn. Models are trained on your own spending data and stored per-user on disk using joblib.
+
+#### Anomaly Detector (IsolationForest)
+- Learns what a "normal" transaction looks like for you based on amount, day of week, and day of month
+- Flags unusual transactions as **High / Medium / Low** suspicion
+- Results appear as the **Flagged Transactions** card on the dashboard
+- Minimum threshold: 12 transactions for live detection, 30 for a full trained model
+- Includes a **Reliability %** badge so you know how much to trust the results
+
+#### Spending Forecaster (Linear Regression)
+- Fits a trend line through your monthly per-category spending history
+- Predicts what you're likely to spend next month in each category
+- Trends shown as **↑ Up / ↓ Down / → Stable** with color-coded bars (red/green/blue)
+- Results appear as the **Next Month Forecast** bar chart on the dashboard
+- Minimum threshold: 3 months of history per category
+
+#### Auto-Retrain Scheduler
+- Automatically retrains both models in a background thread on app startup when the schedule is due
+- Schedule options: **Daily / Weekly (default) / Monthly**
+- Configurable from **Settings → ML Engine**
+- Last retrain date and next retrain date shown in the ML status dialog
+- Manual **Retrain Now** button available anytime
+
 ### 🌍 Multi-Currency Support
 Supports 17 currencies with correct symbols and decimal places:
 
@@ -84,6 +111,7 @@ Supports 17 currencies with correct symbols and decimal places:
 - Save / update your Anthropic API key (stored locally, masked in the UI)
 - Choose AI provider mode (Smart / Online First / Offline First)
 - View and clear AI chat storage usage
+- **ML Engine panel** — view model status, last/next retrain dates, transaction count, months of data, and retrain schedule; trigger a manual retrain from here
 - Dark / Light theme toggle (available from any screen)
 
 ---
@@ -95,6 +123,11 @@ Supports 17 currencies with correct symbols and decimal places:
 | UI Framework | [Flet](https://flet.dev/) (Flutter-based Python UI) |
 | Language | Python 3.10+ |
 | Database | SQLite via custom `database.py` (per-user DBs + shared `users.db`) |
+| ML — Anomaly Detection | scikit-learn `IsolationForest` |
+| ML — Forecasting | scikit-learn `LinearRegression` |
+| ML — Model Persistence | `joblib` (ships with scikit-learn) |
+| Data Processing | `pandas`, `numpy` |
+| Charts | `matplotlib` (Agg backend, embedded as base64 PNG) |
 | AI — Offline | [Ollama](https://ollama.com/) local LLM (llama3.2, qwen2.5, phi3, etc.) |
 | AI — Online | Anthropic Claude API (`claude-haiku-4-5`) |
 | Date Math | `python-dateutil` (relativedelta for monthly/yearly recurrence) |
@@ -111,7 +144,15 @@ Each user profile has its own SQLite file (`budget_user_<id>.db`) containing:
 - `recurring_transactions` — repeating transactions with frequency and next-due tracking
 - `notifications` — persistent notification inbox
 - `chat_sessions` + `chat_messages` — full AI conversation history
-- `app_meta` — user preferences (currency, API key, AI mode, starting balance)
+- `app_meta` — user preferences (currency, API key, AI mode, starting balance, dashboard card order, ML retrain schedule and last-run date)
+
+Trained ML models are stored separately in:
+
+```
+user_data/ml_models/budget_user_<id>/
+    anomaly_detector.pkl   ← IsolationForest
+    forecasters.pkl        ← dict of { category: LinearRegression }
+```
 
 ---
 
@@ -129,7 +170,7 @@ git clone https://github.com/salipuranalgine-cmyk/ai-budget-tracker.git
 cd ai-budget-tracker
 
 # Install dependencies
-pip install flet python-dateutil
+pip install flet python-dateutil scikit-learn pandas matplotlib numpy joblib
 
 # Run the app
 python main.py
@@ -149,6 +190,14 @@ ollama pull llama3.2
 1. Get an API key from [console.anthropic.com](https://console.anthropic.com)
 2. Go to **Settings → AI Setup** in the app and paste your key
 
+**Enabling ML Predictions**
+
+The ML engine activates automatically once you have enough transaction history:
+- Anomaly detection: starts scanning from 12 transactions; full model trains at 30
+- Spending forecast: activates after 3+ months of data per category
+
+No extra setup needed — the app trains in the background on launch.
+
 ---
 
 ## 📸 Screenshots
@@ -166,14 +215,17 @@ ollama pull llama3.2
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 9_54_58 PM" src="https://github.com/user-attachments/assets/ff94aa65-d06c-444a-8a37-910cf0fd7587" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_23_36 PM" src="https://github.com/user-attachments/assets/8a579961-3e4a-4eb0-99ac-4414f7174ee4" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_23_49 PM" src="https://github.com/user-attachments/assets/6ad7bd61-9c82-49db-aee8-25f591d9a0ca" />
-
+<img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_07_10 AM" src="https://github.com/user-attachments/assets/17800db5-756f-423c-8da2-deefbef73b87" />
+<img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_01_16 AM" src="https://github.com/user-attachments/assets/19a46c6d-20f8-483f-9ffe-fec0764cdbcf" />
+<img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_01_00 AM" src="https://github.com/user-attachments/assets/22210ce8-9653-45c7-a5d2-ccb3f3c19575" />
 
 ---
 
 ## 🔮 Planned Improvements
 
-- [ ] Charts and spending trend graphs
 - [ ] Android APK packaging via Flet mobile
+- [ ] More ML models (clustering for category auto-tagging, etc.)
+- [ ] Spending trend graphs per category over time
 
 ---
 
