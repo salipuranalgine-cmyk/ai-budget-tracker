@@ -890,6 +890,17 @@ def main(page: ft.Page):
             page.on_resize = None
             show_user_select(auto_resume=False)
 
+        def _appbar_avatar() -> ft.Control:
+            if user.avatar_image:
+                return ft.Container(
+                    width=24,
+                    height=24,
+                    border_radius=12,
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                    content=ft.Image(src=user.avatar_image, fit=ft.BoxFit.COVER),
+                )
+            return ft.Text(user.emoji, size=18)
+
         def _apply_appbar() -> None:
             compact = _is_compact_width(page)
             title.size = 16 if compact else 18
@@ -904,7 +915,7 @@ def main(page: ft.Page):
                             spacing=6,
                             tight=True,
                             controls=[
-                                ft.Text(user.emoji, size=18),
+                                _appbar_avatar(),
                                 *(
                                     []
                                     if compact

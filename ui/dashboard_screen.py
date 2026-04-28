@@ -410,6 +410,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         min_width=280,
         min_height=360,
     )
+    compact_history_layout = history_width < 420
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -451,6 +452,42 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         ),
         actions=[],
     )
+
+    history_action_row = ft.Row(
+        wrap=True,
+        run_spacing=4,
+        spacing=4,
+        alignment=ft.MainAxisAlignment.START if compact_history_layout else ft.MainAxisAlignment.END,
+        controls=[
+            ft.TextButton("+ New Chat", icon=ft.Icons.ADD, on_click=lambda _: _new_chat()),
+            ft.TextButton(
+                "Clear All",
+                icon=ft.Icons.DELETE_FOREVER,
+                style=ft.ButtonStyle(color=ft.Colors.RED_400),
+                on_click=lambda _: _confirm_clear_all(),
+            ),
+        ],
+    )
+    history_top_bar = (
+        ft.Column(
+            spacing=8,
+            controls=[storage_text, history_action_row],
+        )
+        if compact_history_layout else
+        ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            controls=[
+                ft.Container(expand=True, content=storage_text),
+                ft.Container(content=history_action_row),
+            ],
+        )
+    )
+    dlg.content.content.controls[0] = history_top_bar
+    bulk_actions_row = next((c for c in dlg.content.content.controls if getattr(c, "key", None) == "bulk_actions_row"), None)
+    if bulk_actions_row:
+        bulk_actions_row.wrap = True
+        bulk_actions_row.run_spacing = 4
 
     def _close():
         dlg.open = False
@@ -1130,6 +1167,7 @@ def _section_card(
             padding=ft.Padding(left=16, right=16, top=14, bottom=14),
             border_radius=16,
             expand=True,
+            bgcolor=ft.Colors.SURFACE,
             gradient=ft.LinearGradient(
                 begin=ft.Alignment(-1, -1),
                 end=ft.Alignment(1, 1),
@@ -2071,7 +2109,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     module_surface_refs: dict[str, ft.Ref[ft.Container]] = {}
     dashboard_ref = ft.Ref[ft.Column]()
     drag_state = {"active_id": None}
-    reorder_state = {"armed_id": None}
+    reorder_state = {"armed_id": None, "pending_id": None}
     dashboard_modules: dict[str, ft.Control] = {}
     dashboard_module_specs: dict[str, tuple[dict[str, int], callable]] = {}
 
@@ -2096,20 +2134,19 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     def _set_reorder_armed(module_id: str | None) -> None:
         reorder_state["armed_id"] = module_id
+        if module_id is None:
+            reorder_state["pending_id"] = None
         _rebuild_dashboard_grid()
         page.update()
 
     def _is_mobile_drag_mode() -> bool:
+        try:
+            if page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS):
+                return True
+        except Exception:
+            pass
         width = page.width or getattr(page, "window_width", None) or 0
         return bool(width) and width < 700
-
-    async def _auto_scroll_dashboard(delta: int) -> None:
-        if dashboard_ref.current is None:
-            return
-        try:
-            await dashboard_ref.current.scroll_to(delta=delta, duration=120)
-        except Exception:
-            return
 
     def _refresh_module_surface(module_id: str, *, hovered: bool = False, drop_target: bool = False) -> None:
         surface = module_surface_refs.get(module_id)
@@ -2211,13 +2248,13 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         page_width = page.width or 1100
         page_height = page.height or 760
         if page_width < 700:
-            dialog_width = int(min(page_width - 24, max(300, page_width * 0.94)))
-            dialog_height = int(min(page_height - 36, max(420, page_height * 0.90)))
-            content_height = max(280, dialog_height - 118)
+            dialog_width = int(min(page_width - 20, max(300, page_width * 0.95)))
+            content_height = int(min(page_height * 0.48, max(220, dialog_width * 0.62)))
+            dialog_height = int(min(page_height - 28, max(360, content_height + 138)))
             return dialog_width, dialog_height, content_height
-        dialog_width = int(min(1040, max(680, page_width * 0.82)))
-        dialog_height = int(min(720, max(520, page_height * 0.78)))
-        content_height = max(360, dialog_height - 118)
+        dialog_width = int(min(1120, max(760, page_width * 0.88)))
+        content_height = int(min(page_height * 0.55, max(320, dialog_width * 0.48)))
+        dialog_height = int(min(page_height - 40, max(500, content_height + 148)))
         return dialog_width, dialog_height, content_height
 
     def _open_expanded_module(module_id: str) -> None:
@@ -2226,28 +2263,35 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             return
 
         dialog_width, dialog_height, _ = _expanded_dialog_size()
-        title = module_id.replace("_", " ").title()
+        built_content = builder()
+        expanded_body = built_content.content if isinstance(built_content, ft.Card) else built_content
+
         dlg = ft.AlertDialog(
             modal=True,
-            title=ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                controls=[
-                    ft.Text(title, size=15, weight=ft.FontWeight.BOLD),
+            bgcolor=ft.Colors.TRANSPARENT,
+            content=ft.Container(
+                width=dialog_width,
+                height=dialog_height,
+                padding=ft.Padding(left=0, right=0, top=0, bottom=0),
+                content=expanded_body,
+            ),
+            actions=[],
+        )
+
+        if isinstance(built_content, ft.Card):
+            try:
+                header_row = built_content.content.content.controls[0]
+                header_row.controls.append(
                     ft.IconButton(
                         icon=ft.Icons.CLOSE,
                         icon_size=20,
                         tooltip="Close expanded view",
                         on_click=lambda _: _close_expanded_module(dlg),
-                    ),
-                ],
-            ),
-            content=ft.Container(
-                width=dialog_width,
-                height=dialog_height,
-                content=builder(),
-            ),
-            actions=[],
-        )
+                    )
+                )
+            except Exception:
+                pass
+
         page.overlay.append(dlg)
         dlg.open = True
         page.update()
@@ -2272,12 +2316,11 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             module_order[target_index],
             module_order[source_index],
         )
-        module_grid.controls = [dashboard_modules[module_id] for module_id in module_order]
         _persist_dashboard_order()
         drag_state["active_id"] = None
         reorder_state["armed_id"] = None
-        for current_module_id in module_order:
-            _refresh_module_surface(current_module_id)
+        reorder_state["pending_id"] = None
+        _rebuild_dashboard_grid()
         page.update()
 
     def _on_drag_start(module_id: str) -> None:
@@ -2288,6 +2331,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     def _on_drag_complete(module_id: str) -> None:
         drag_state["active_id"] = None
         reorder_state["armed_id"] = None
+        reorder_state["pending_id"] = None
         for current_module_id in module_order:
             _refresh_module_surface(current_module_id)
         page.update()
@@ -2308,19 +2352,58 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     def _module_header_action(module_id: str, builder) -> ft.Control:
         mobile_mode = _is_mobile_drag_mode()
         armed = reorder_state["armed_id"] == module_id
+        pending_id = reorder_state.get("pending_id")
 
-        def _arm_drag(_):
-            _set_reorder_armed(module_id)
-            page.snack_bar = ft.SnackBar(
-                ft.Text(
-                    "Reorder unlocked. Drag the handle now."
-                    if mobile_mode else
-                    "Drag this card to reorder it."
-                ),
-                duration=1400,
+        if mobile_mode:
+            if pending_id and pending_id != module_id:
+                def _swap_into_place(_):
+                    source_id = reorder_state.get("pending_id")
+                    if not source_id or source_id not in module_order or module_id not in module_order:
+                        _set_reorder_armed(None)
+                        return
+                    source_index = module_order.index(source_id)
+                    target_index = module_order.index(module_id)
+                    module_order[source_index], module_order[target_index] = (
+                        module_order[target_index],
+                        module_order[source_index],
+                    )
+                    _persist_dashboard_order()
+                    _set_reorder_armed(None)
+
+                return ft.IconButton(
+                    icon=ft.Icons.SWAP_VERT,
+                    icon_color="#34d399",
+                    tooltip="Move selected card here",
+                    on_click=_swap_into_place,
+                )
+
+            if armed:
+                def _cancel_reorder(_):
+                    _set_reorder_armed(None)
+
+                return ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_color="#f472b6",
+                    tooltip="Cancel reorder",
+                    on_click=_cancel_reorder,
+                )
+
+            def _select_reorder_source(_):
+                reorder_state["pending_id"] = module_id
+                _set_reorder_armed(module_id)
+                page.snack_bar = ft.SnackBar(
+                    ft.Text("Tap another card handle to swap positions."),
+                    duration=1800,
+                )
+                page.snack_bar.open = True
+                page.update()
+
+            return ft.IconButton(
+                icon=ft.Icons.DRAG_INDICATOR,
+                icon_color="#7dd3fc" if pending_id == module_id else ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+                tooltip="Tap to start reordering",
+                on_click=_select_reorder_source,
             )
-            page.snack_bar.open = True
-            page.update()
 
         draggable = ft.Draggable(
             group="dashboard-module",
@@ -2341,23 +2424,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             ),
         )
 
-        if not mobile_mode:
-            return draggable
-
-        if armed:
-            return ft.Container(
-                tooltip="Drag to reorder",
-                content=draggable,
-            )
-
-        return ft.GestureDetector(
-            on_long_press_start=_arm_drag,
-            mouse_cursor=ft.MouseCursor.GRAB,
-            content=ft.Container(
-                tooltip="Hold to unlock reordering",
-                content=_drag_handle(module_id),
-            ),
-        )
+        return draggable
 
     def _wrap_dashboard_module(module_id: str, col_spec: dict[str, int], builder, feedback_width: int = 420) -> ft.Control:
         shell_ref = ft.Ref[ft.Container]()

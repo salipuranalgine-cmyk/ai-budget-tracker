@@ -22,6 +22,7 @@ class UserProfile:
     id: int
     name: str
     emoji: str
+    avatar_image: str | None
     created_at: str
 
 
@@ -45,10 +46,12 @@ def init_users_db() -> None:
                 id BIGSERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 emoji TEXT NOT NULL DEFAULT '🙂',
+                avatar_image TEXT,
                 created_at TEXT DEFAULT to_char(CURRENT_DATE, 'YYYY-MM-DD')
             )
             """
         )
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_image TEXT")
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS users_name_lower_idx
@@ -70,10 +73,11 @@ def init_users_db() -> None:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS users (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            emoji       TEXT    NOT NULL DEFAULT '{DEFAULT_EMOJI}',
-            created_at  TEXT    DEFAULT (date('now'))
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+            emoji        TEXT    NOT NULL DEFAULT '{DEFAULT_EMOJI}',
+            avatar_image TEXT,
+            created_at   TEXT    DEFAULT (date('now'))
         )
         """
     )
@@ -91,6 +95,10 @@ def init_users_db() -> None:
         )
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN avatar_image TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -102,6 +110,7 @@ def _row_to_profile(row) -> UserProfile | None:
         id=row["id"],
         name=row["name"],
         emoji=row["emoji"] or DEFAULT_EMOJI,
+        avatar_image=row["avatar_image"],
         created_at=row["created_at"],
     )
 
@@ -109,7 +118,7 @@ def _row_to_profile(row) -> UserProfile | None:
 def get_users() -> list[UserProfile]:
     conn = _connect()
     rows = conn.execute(
-        "SELECT id, name, emoji, created_at FROM users ORDER BY name ASC"
+        "SELECT id, name, emoji, avatar_image, created_at FROM users ORDER BY name ASC"
     ).fetchall()
     conn.close()
     return [profile for row in rows if (profile := _row_to_profile(row)) is not None]
@@ -118,24 +127,24 @@ def get_users() -> list[UserProfile]:
 def get_user_by_id(user_id: int) -> UserProfile | None:
     conn = _connect()
     row = conn.execute(
-        "SELECT id, name, emoji, created_at FROM users WHERE id = ?",
+        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
     conn.close()
     return _row_to_profile(row)
 
 
-def add_user(name: str, emoji: str = DEFAULT_EMOJI) -> UserProfile:
+def add_user(name: str, emoji: str = DEFAULT_EMOJI, avatar_image: str | None = None) -> UserProfile:
     clean_name = name.strip()
     conn = _connect()
     if db.using_postgres():
         row = conn.execute(
             """
-            INSERT INTO users (name, emoji)
-            VALUES (?, ?)
-            RETURNING id, name, emoji, created_at
+            INSERT INTO users (name, emoji, avatar_image)
+            VALUES (?, ?, ?)
+            RETURNING id, name, emoji, avatar_image, created_at
             """,
-            (clean_name, emoji or DEFAULT_EMOJI),
+            (clean_name, emoji or DEFAULT_EMOJI, avatar_image),
         ).fetchone()
         conn.commit()
         conn.close()
@@ -146,19 +155,44 @@ def add_user(name: str, emoji: str = DEFAULT_EMOJI) -> UserProfile:
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (name, emoji) VALUES (?, ?)",
-        (clean_name, emoji or DEFAULT_EMOJI),
+        "INSERT INTO users (name, emoji, avatar_image) VALUES (?, ?, ?)",
+        (clean_name, emoji or DEFAULT_EMOJI, avatar_image),
     )
     conn.commit()
     uid = cur.lastrowid
     row = conn.execute(
-        "SELECT id, name, emoji, created_at FROM users WHERE id = ?",
+        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
         (uid,),
     ).fetchone()
     conn.close()
     profile = _row_to_profile(row)
     if profile is None:
         raise RuntimeError("Failed to create user profile.")
+    return profile
+
+
+def update_user(
+    user_id: int,
+    *,
+    name: str,
+    emoji: str = DEFAULT_EMOJI,
+    avatar_image: str | None = None,
+) -> UserProfile:
+    clean_name = name.strip()
+    conn = _connect()
+    conn.execute(
+        "UPDATE users SET name = ?, emoji = ?, avatar_image = ? WHERE id = ?",
+        (clean_name, emoji or DEFAULT_EMOJI, avatar_image, user_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    profile = _row_to_profile(row)
+    if profile is None:
+        raise RuntimeError("Failed to update user profile.")
     return profile
 
 
@@ -234,17 +268,30 @@ def get_db_path(user_id: int) -> str:
     return str(USER_DATA_DIR / f"budget_user_{user_id}.db")
 
 
-def user_name_exists(name: str) -> bool:
+def user_name_exists(name: str, *, exclude_user_id: int | None = None) -> bool:
     conn = _connect()
+    clean_name = name.strip()
     if db.using_postgres():
-        row = conn.execute(
-            "SELECT 1 FROM users WHERE LOWER(name) = LOWER(?)",
-            (name.strip(),),
-        ).fetchone()
+        if exclude_user_id is None:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE LOWER(name) = LOWER(?)",
+                (clean_name,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE LOWER(name) = LOWER(?) AND id <> ?",
+                (clean_name, exclude_user_id),
+            ).fetchone()
     else:
-        row = conn.execute(
-            "SELECT 1 FROM users WHERE name = ? COLLATE NOCASE",
-            (name.strip(),),
-        ).fetchone()
+        if exclude_user_id is None:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE name = ? COLLATE NOCASE",
+                (clean_name,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE name = ? COLLATE NOCASE AND id <> ?",
+                (clean_name, exclude_user_id),
+            ).fetchone()
     conn.close()
     return row is not None
