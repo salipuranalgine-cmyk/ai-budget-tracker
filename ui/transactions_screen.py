@@ -84,6 +84,11 @@ def _toast(page: ft.Page, text: str) -> None:
     page.update()
 
 
+def _dialog_width(page: ft.Page, *, max_width: int = 360, min_width: int = 280) -> int:
+    width = page.width or getattr(page, "window_width", None) or max_width
+    return int(min(max_width, max(min_width, width - 32)))
+
+
 # ---------------------------------------------------------------------------
 # Date picker helpers
 # ---------------------------------------------------------------------------
@@ -186,6 +191,8 @@ def _build_single_date_picker(
 def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> None:
     is_edit = txn is not None
     peso = make_peso(db.get_currency())  # dynamic currency
+    dialog_width = _dialog_width(page)
+    submit_state = {"busy": False}
 
     balance = db.get_balance()
     month_spend = sum(db.get_month_expense_summary(now_month()).values())
@@ -290,12 +297,22 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
     freq_dd.on_change = on_freq_change
 
     def save(_):
+        if submit_state["busy"]:
+            return
+        submit_state["busy"] = True
+        save_btn.disabled = True
+        cancel_btn.disabled = True
+        page.update()
         try:
             val = float(amount_field.value.strip().replace(",", ""))
             if val <= 0:
                 raise ValueError
         except ValueError:
             _toast(page, "Enter a valid positive amount.")
+            submit_state["busy"] = False
+            save_btn.disabled = False
+            cancel_btn.disabled = False
+            page.update()
             return
 
         date_str = sel_effective[0].isoformat()
@@ -310,6 +327,10 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
                     raise ValueError
             except (ValueError, TypeError):
                 _toast(page, "Enter a valid number of days for custom frequency.")
+                submit_state["busy"] = False
+                save_btn.disabled = False
+                cancel_btn.disabled = False
+                page.update()
                 return
             db.add_recurring_transaction(
                 txn_type="expense",
@@ -341,6 +362,13 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
         _close_dialog(page, dlg)
         on_done(was_recurring=is_recurring and not is_edit)
 
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    save_btn = ft.ElevatedButton(
+        "Save Expense",
+        icon=ft.Icons.SAVE,
+        on_click=save,
+        style=ft.ButtonStyle(bgcolor=ft.Colors.RED_500, color=ft.Colors.WHITE),
+    )
     dlg = ft.AlertDialog(
         modal=True,
         title=ft.Row(
@@ -354,7 +382,7 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
             ]
         ),
         content=ft.Container(
-            width=360,
+            width=dialog_width,
             content=ft.Column(
                 tight=True,
                 spacing=14,
@@ -411,13 +439,8 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
             ),
         ),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg)),
-            ft.ElevatedButton(
-                "Save Expense",
-                icon=ft.Icons.SAVE,
-                on_click=save,
-                style=ft.ButtonStyle(bgcolor=ft.Colors.RED_500, color=ft.Colors.WHITE),
-            ),
+            cancel_btn,
+            save_btn,
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -432,6 +455,8 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
     is_edit = txn is not None
     peso = make_peso(db.get_currency())  # dynamic currency
     balance = db.get_balance()
+    dialog_width = _dialog_width(page)
+    submit_state = {"busy": False}
 
     # --- Type toggle ---
     txn_mode = ft.Dropdown(
@@ -536,12 +561,22 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
     freq_dd.on_change = on_freq_change
 
     def save(_):
+        if submit_state["busy"]:
+            return
+        submit_state["busy"] = True
+        save_btn.disabled = True
+        cancel_btn.disabled = True
+        page.update()
         try:
             val = float(amount_field.value.strip().replace(",", ""))
             if val <= 0:
                 raise ValueError
         except ValueError:
             _toast(page, "Enter a valid positive amount.")
+            submit_state["busy"] = False
+            save_btn.disabled = False
+            cancel_btn.disabled = False
+            page.update()
             return
 
         date_str = sel_effective[0].isoformat()
@@ -556,6 +591,10 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
                     raise ValueError
             except (ValueError, TypeError):
                 _toast(page, "Enter a valid number of days.")
+                submit_state["busy"] = False
+                save_btn.disabled = False
+                cancel_btn.disabled = False
+                page.update()
                 return
             # Use the proper income category instead of hardcoded "Income"
             income_category = income_cat_dd.value or INCOME_CATEGORIES[0]
@@ -590,6 +629,13 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
         _close_dialog(page, dlg)
         on_done(was_recurring=is_recurring and not is_edit)
 
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    save_btn = ft.ElevatedButton(
+        "Save Income",
+        icon=ft.Icons.SAVE,
+        on_click=save,
+        style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
+    )
     dlg = ft.AlertDialog(
         modal=True,
         title=ft.Row(
@@ -603,7 +649,7 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
             ]
         ),
         content=ft.Container(
-            width=360,
+            width=dialog_width,
             content=ft.Column(
                 tight=True,
                 spacing=14,
@@ -657,13 +703,8 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
             ),
         ),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg)),
-            ft.ElevatedButton(
-                "Save Income",
-                icon=ft.Icons.SAVE,
-                on_click=save,
-                style=ft.ButtonStyle(bgcolor=ft.Colors.GREEN_700, color=ft.Colors.WHITE),
-            ),
+            cancel_btn,
+            save_btn,
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -706,6 +747,8 @@ def _delete_dialog(page: ft.Page, txn_id: int, on_done) -> None:
 def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) -> None:
     peso = make_peso(db.get_currency())  # dynamic currency
     """Dialog to edit an existing recurring transaction's amount, schedule, and details."""
+    dialog_width = _dialog_width(page)
+    submit_state = {"busy": False}
 
     is_income = rec.txn_type == "income"
     all_categories = INCOME_CATEGORIES if is_income else DEFAULT_CATEGORIES
@@ -769,12 +812,22 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
     sel_next, next_btn, _ = _build_single_date_picker(page, init_next, btn_icon=ft.Icons.EVENT_REPEAT)
 
     def save(_):
+        if submit_state["busy"]:
+            return
+        submit_state["busy"] = True
+        save_btn.disabled = True
+        cancel_btn.disabled = True
+        page.update()
         try:
             val = float(amount_field.value.strip().replace(",", ""))
             if val <= 0:
                 raise ValueError
         except ValueError:
             _toast(page, "Enter a valid positive amount.")
+            submit_state["busy"] = False
+            save_btn.disabled = False
+            cancel_btn.disabled = False
+            page.update()
             return
 
         freq_label = freq_dd.value or "Monthly"
@@ -785,6 +838,10 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
                 raise ValueError
         except (ValueError, TypeError):
             _toast(page, "Enter valid number of days.")
+            submit_state["busy"] = False
+            save_btn.disabled = False
+            cancel_btn.disabled = False
+            page.update()
             return
 
         db.update_recurring_transaction(
@@ -802,6 +859,16 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
 
     color = ft.Colors.GREEN_400 if is_income else ft.Colors.RED_400
     icon = ft.Icons.SAVINGS if is_income else ft.Icons.RECEIPT_LONG
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    save_btn = ft.ElevatedButton(
+        "Save Changes",
+        icon=ft.Icons.SAVE,
+        on_click=save,
+        style=ft.ButtonStyle(
+            bgcolor=ft.Colors.GREEN_700 if is_income else ft.Colors.INDIGO_600,
+            color=ft.Colors.WHITE,
+        ),
+    )
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -812,7 +879,7 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
             ]
         ),
         content=ft.Container(
-            width=360,
+            width=dialog_width,
             content=ft.Column(
                 tight=True,
                 spacing=12,
@@ -847,16 +914,8 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
             ),
         ),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg)),
-            ft.ElevatedButton(
-                "Save Changes",
-                icon=ft.Icons.SAVE,
-                on_click=save,
-                style=ft.ButtonStyle(
-                    bgcolor=ft.Colors.GREEN_700 if is_income else ft.Colors.INDIGO_600,
-                    color=ft.Colors.WHITE,
-                ),
-            ),
+            cancel_btn,
+            save_btn,
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )

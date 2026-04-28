@@ -107,7 +107,7 @@ def _model_path(name: str) -> Path:
 
 
 def _db_training_key() -> str:
-    return str(Path(db.DB_FILE).resolve())
+    return db.get_storage_key()
 
 
 def _save_model(name: str, model) -> None:

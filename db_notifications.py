@@ -7,18 +7,32 @@ def init_notifications_table() -> None:
     import database as db
 
     conn = db._connect()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS notifications (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            notif_type  TEXT    NOT NULL,
-            title       TEXT    NOT NULL,
-            message     TEXT    NOT NULL,
-            is_read     INTEGER DEFAULT 0,
-            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+    if db.using_postgres():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id BIGSERIAL PRIMARY KEY,
+                notif_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                notif_type  TEXT    NOT NULL,
+                title       TEXT    NOT NULL,
+                message     TEXT    NOT NULL,
+                is_read     INTEGER DEFAULT 0,
+                created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+            )
+            """
+        )
     conn.commit()
     conn.close()
 
@@ -26,16 +40,10 @@ def init_notifications_table() -> None:
 def add_notification(notif_type: str, title: str, message: str) -> int:
     import database as db
 
-    conn = db._connect()
-    cur = conn.cursor()
-    cur.execute(
+    return db.insert_and_get_id(
         "INSERT INTO notifications (notif_type, title, message) VALUES (?, ?, ?)",
         (notif_type, title, message),
     )
-    conn.commit()
-    notif_id = cur.lastrowid
-    conn.close()
-    return int(notif_id)
 
 
 def get_notifications() -> list[dict]:
@@ -57,9 +65,14 @@ def get_unread_notifications_count() -> int:
     import database as db
 
     conn = db._connect()
-    row = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM notifications WHERE is_read = 0"
-    ).fetchone()
+    if db.using_postgres():
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM notifications WHERE is_read = FALSE"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM notifications WHERE is_read = 0"
+        ).fetchone()
     conn.close()
     return int(row["cnt"])
 
@@ -68,7 +81,10 @@ def mark_notification_read(notif_id: int) -> None:
     import database as db
 
     conn = db._connect()
-    conn.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (notif_id,))
+    conn.execute(
+        "UPDATE notifications SET is_read = ? WHERE id = ?",
+        ((True if db.using_postgres() else 1), notif_id),
+    )
     conn.commit()
     conn.close()
 
@@ -77,7 +93,10 @@ def mark_all_notifications_read() -> None:
     import database as db
 
     conn = db._connect()
-    conn.execute("UPDATE notifications SET is_read = 1")
+    conn.execute(
+        "UPDATE notifications SET is_read = ?",
+        ((True if db.using_postgres() else 1),),
+    )
     conn.commit()
     conn.close()
 

@@ -1,6 +1,6 @@
 # 💰 AI Smart Saver — Budget Guardian
 
-A personal budget tracking desktop app built with **Python + Flet**, featuring AI-powered multi-turn chat, a full notification hub, recurring transaction automation, multi-currency support, and a clean dark/light UI.
+A personal budget tracking app built with **Python + Flet**, now ready to run on either local SQLite or a shared **PostgreSQL + FastAPI** backend for cross-device access.
 
 ---
 
@@ -8,7 +8,7 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 
 ### 👤 Multi-User Profiles
 - Create multiple profiles with custom emoji avatars
-- Each profile gets its own isolated SQLite database
+- Each profile can use its own local SQLite database or its own PostgreSQL schema
 - Auto-resumes the last active profile on launch
 - Switch or delete profiles anytime from the profile screen
 
@@ -48,7 +48,7 @@ A personal budget tracking desktop app built with **Python + Flet**, featuring A
 
 ### 🤖 AI Insights & Chat
 - **Multi-turn conversation** — chat with the AI across multiple messages, not just one-shot
-- Persistent **chat session history** saved to SQLite (browse, resume, or delete past sessions)
+- Persistent **chat session history** saved in your active database backend
 - Dual-provider support:
   - **Offline (Ollama)** — runs locally with no internet required (llama3.2, qwen2.5, phi3, and more)
   - **Online (Anthropic Claude)** — uses your API key for cloud-based responses
@@ -94,7 +94,8 @@ Supports 17 currencies with correct symbols and decimal places:
 |-------|------------|
 | UI Framework | [Flet](https://flet.dev/) (Flutter-based Python UI) |
 | Language | Python 3.10+ |
-| Database | SQLite via custom `database.py` (per-user DBs + shared `users.db`) |
+| Database | SQLite or PostgreSQL via custom `database.py` |
+| API | FastAPI + Uvicorn for phone/web clients |
 | AI — Offline | [Ollama](https://ollama.com/) local LLM (llama3.2, qwen2.5, phi3, etc.) |
 | AI — Online | Anthropic Claude API (`claude-haiku-4-5`) |
 | Date Math | `python-dateutil` (relativedelta for monthly/yearly recurrence) |
@@ -104,7 +105,9 @@ Supports 17 currencies with correct symbols and decimal places:
 
 ## 🗄️ Database Schema (per user)
 
-Each user profile has its own SQLite file (`budget_user_<id>.db`) containing:
+Each user profile keeps its own isolated data scope. With SQLite that is `budget_user_<id>.db`; with PostgreSQL that is a schema such as `budget_user_<id>`.
+
+Each user scope contains:
 
 - `transactions` — all income and expense records
 - `budget_limits` — per-category limits with duration and date range
@@ -128,7 +131,7 @@ Each user profile has its own SQLite file (`budget_user_<id>.db`) containing:
 git clone https://github.com/salipuranalgine-cmyk/ai-budget-tracker.git
 cd ai-budget-tracker
 
-# Install dependencies
+# Install desktop dependencies
 pip install flet python-dateutil
 
 # Run the app

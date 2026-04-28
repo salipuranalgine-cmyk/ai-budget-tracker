@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -19,19 +19,13 @@ def add_transaction(
 
     txn_date = txn_date or datetime.now().strftime("%Y-%m-%d")
     logged_date = datetime.now().strftime("%Y-%m-%d")
-    conn = db._connect()
-    cur = conn.cursor()
-    cur.execute(
+    return db.insert_and_get_id(
         """
         INSERT INTO transactions (txn_type, amount, category, description, txn_date, logged_date)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (txn_type, amount, category, description.strip(), txn_date, logged_date),
     )
-    conn.commit()
-    last_id = cur.lastrowid
-    conn.close()
-    return int(last_id)
 
 
 def update_transaction(
@@ -176,14 +170,17 @@ def set_app_meta(key: str, value: str) -> None:
 def get_balance() -> float:
     import database as db
 
+    today = datetime.now().strftime("%Y-%m-%d")
     conn = db._connect()
     income = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
-        "WHERE txn_type = 'income' AND txn_date <= date('now')"
+        "WHERE txn_type = 'income' AND txn_date <= ?",
+        (today,),
     ).fetchone()["total"]
     expense = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions "
-        "WHERE txn_type = 'expense' AND txn_date <= date('now')"
+        "WHERE txn_type = 'expense' AND txn_date <= ?",
+        (today,),
     ).fetchone()["total"]
     conn.close()
     starting = get_starting_balance()
@@ -242,16 +239,17 @@ def get_expense_summary_range(start_date: str, end_date: str) -> dict[str, float
 def get_expenses_last_days(days: int = 30) -> list[tuple[str, float]]:
     import database as db
 
+    cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
     conn = db._connect()
     rows = conn.execute(
         """
         SELECT txn_date, COALESCE(SUM(amount), 0) AS total
         FROM transactions
-        WHERE txn_type = 'expense' AND date(txn_date) >= date('now', ?)
+        WHERE txn_type = 'expense' AND txn_date >= ?
         GROUP BY txn_date
         ORDER BY txn_date ASC
         """,
-        (f"-{days} day",),
+        (cutoff,),
     ).fetchall()
     conn.close()
     return [(row["txn_date"], float(row["total"])) for row in rows]

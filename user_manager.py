@@ -1,7 +1,6 @@
 """
 user_manager.py
-Handles multi-user profiles. Each user gets their own SQLite budget database.
-A shared users.db stores the profile list and lightweight app state.
+Handles multi-user profiles for either local SQLite storage or a shared PostgreSQL backend.
 """
 
 from __future__ import annotations
@@ -10,9 +9,11 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+import database as db
+
 USERS_DB = "users.db"
-USER_DATA_DIR = Path("user_data")   # all per-user .db files go here
-DEFAULT_EMOJI = "🧑"
+USER_DATA_DIR = Path("user_data")
+DEFAULT_EMOJI = "🙂"
 LAST_ACTIVE_USER_KEY = "last_active_user_id"
 
 
@@ -24,15 +25,48 @@ class UserProfile:
     created_at: str
 
 
-def _connect() -> sqlite3.Connection:
+def _connect():
+    if db.using_postgres():
+        return db._connect_public()
+
     conn = sqlite3.connect(USERS_DB)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_users_db() -> None:
-    USER_DATA_DIR.mkdir(exist_ok=True)   # ensure user_data/ folder exists
+    USER_DATA_DIR.mkdir(exist_ok=True)
     conn = _connect()
+    if db.using_postgres():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                emoji TEXT NOT NULL DEFAULT '🙂',
+                created_at TEXT DEFAULT to_char(CURRENT_DATE, 'YYYY-MM-DD')
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS users_name_lower_idx
+            ON users ((LOWER(name)))
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+        return
+
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS users (
@@ -61,7 +95,7 @@ def init_users_db() -> None:
     conn.close()
 
 
-def _row_to_profile(row: sqlite3.Row | None) -> UserProfile | None:
+def _row_to_profile(row) -> UserProfile | None:
     if row is None:
         return None
     return UserProfile(
@@ -92,11 +126,28 @@ def get_user_by_id(user_id: int) -> UserProfile | None:
 
 
 def add_user(name: str, emoji: str = DEFAULT_EMOJI) -> UserProfile:
+    clean_name = name.strip()
     conn = _connect()
+    if db.using_postgres():
+        row = conn.execute(
+            """
+            INSERT INTO users (name, emoji)
+            VALUES (?, ?)
+            RETURNING id, name, emoji, created_at
+            """,
+            (clean_name, emoji or DEFAULT_EMOJI),
+        ).fetchone()
+        conn.commit()
+        conn.close()
+        profile = _row_to_profile(row)
+        if profile is None:
+            raise RuntimeError("Failed to create user profile.")
+        return profile
+
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO users (name, emoji) VALUES (?, ?)",
-        (name.strip(), emoji or DEFAULT_EMOJI),
+        (clean_name, emoji or DEFAULT_EMOJI),
     )
     conn.commit()
     uid = cur.lastrowid
@@ -162,7 +213,6 @@ def get_last_active_user() -> UserProfile | None:
 
 
 def delete_user(user_id: int) -> None:
-    """Delete a user profile and their budget database file."""
     if get_last_active_user_id() == user_id:
         set_last_active_user(None)
 
@@ -172,18 +222,29 @@ def delete_user(user_id: int) -> None:
     conn.close()
 
     db_path = get_db_path(user_id)
-    Path(db_path).unlink(missing_ok=True)
+    if db.using_postgres():
+        db.drop_user_scope(db_path)
+    else:
+        Path(db_path).unlink(missing_ok=True)
 
 
 def get_db_path(user_id: int) -> str:
+    if db.using_postgres():
+        return db.user_schema_name(user_id)
     return str(USER_DATA_DIR / f"budget_user_{user_id}.db")
 
 
 def user_name_exists(name: str) -> bool:
     conn = _connect()
-    row = conn.execute(
-        "SELECT 1 FROM users WHERE name = ? COLLATE NOCASE",
-        (name.strip(),),
-    ).fetchone()
+    if db.using_postgres():
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE LOWER(name) = LOWER(?)",
+            (name.strip(),),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE name = ? COLLATE NOCASE",
+            (name.strip(),),
+        ).fetchone()
     conn.close()
     return row is not None

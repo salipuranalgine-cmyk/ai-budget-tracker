@@ -5,26 +5,48 @@ def init_chat_tables() -> None:
     import database as db
 
     conn = db._connect()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS chat_sessions (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            title       TEXT    NOT NULL DEFAULT 'Chat',
-            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+    if db.using_postgres():
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT 'Chat',
+                created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id  INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-            role        TEXT    NOT NULL CHECK(role IN ('user','assistant')),
-            content     TEXT    NOT NULL,
-            created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id BIGSERIAL PRIMARY KEY,
+                session_id BIGINT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')
+            )
+            """
         )
-        """
-    )
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                title       TEXT    NOT NULL DEFAULT 'Chat',
+                created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role        TEXT    NOT NULL CHECK(role IN ('user','assistant')),
+                content     TEXT    NOT NULL,
+                created_at  TEXT    DEFAULT (datetime('now', 'localtime'))
+            )
+            """
+        )
     conn.commit()
     conn.close()
 
@@ -32,13 +54,10 @@ def init_chat_tables() -> None:
 def create_chat_session(title: str = "New Chat") -> int:
     import database as db
 
-    conn = db._connect()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO chat_sessions (title) VALUES (?)", (title,))
-    conn.commit()
-    session_id = cur.lastrowid
-    conn.close()
-    return int(session_id)
+    return db.insert_and_get_id(
+        "INSERT INTO chat_sessions (title) VALUES (?)",
+        (title,),
+    )
 
 
 def save_chat_message(session_id: int, role: str, content: str) -> None:

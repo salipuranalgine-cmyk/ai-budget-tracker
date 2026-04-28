@@ -303,7 +303,7 @@ def _build_forecast_chart(
     )
 
     ax.set_title(
-        "Predicted Spending — Next Month",
+        "Predicted Spending Next Month",
         color=theme["text"], fontsize=11, fontweight="bold", pad=10, x=0.35,
     )
     fig.subplots_adjust(left=0.22, right=0.86, top=0.84, bottom=0.10)
@@ -446,7 +446,7 @@ def build_ml_forecast_card(
 
     return _section_card(
         "Next Month Forecast",
-        f"Live estimate from your current spending history — reliability {forecast_reliability}%.",
+        f"Live estimate from your current spending history reliability {forecast_reliability}%.",
         icon=ft.Icons.AUTO_GRAPH_ROUNDED,
         accent_color="#a78bfa",
         content=body,
@@ -571,7 +571,7 @@ def _suspicion_level(score: float) -> tuple[str, ft.Colors]:
     """
     Convert a raw IsolationForest anomaly score to a human-readable label.
 
-    IsolationForest scores are negative — more negative = more anomalous.
+    IsolationForest scores are negative more negative = more anomalous.
     We bucket them into three levels so the user doesn't need to understand
     the raw numbers.
 
@@ -671,7 +671,7 @@ def build_ml_anomaly_card(
 
         return _section_card(
             "Flagged Transactions",
-            f"IsolationForest scan warming up — reliability {anomaly_reliability}%.",
+            f"IsolationForest scan warming up reliability {anomaly_reliability}%.",
             icon=ft.Icons.POLICY_ROUNDED,
             accent_color="#f472b6",
             content=ft.Container(
@@ -769,7 +769,7 @@ def build_ml_anomaly_card(
 
     return _section_card(
         "Flagged Transactions",
-        f"IsolationForest scan of your current history — reliability {anomaly_reliability}%.",
+        f"IsolationForest scan of your current history reliability {anomaly_reliability}%.",
         icon=ft.Icons.POLICY_ROUNDED,
         accent_color="#f472b6",
         content=body,

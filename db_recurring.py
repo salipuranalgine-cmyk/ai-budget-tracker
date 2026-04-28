@@ -34,6 +34,16 @@ def add_recurring_transaction(
 ) -> int:
     import database as db
 
+    if db.using_postgres():
+        return db.insert_and_get_id(
+            """
+            INSERT INTO recurring_transactions
+                (txn_type, amount, category, description, frequency, frequency_days, start_date, next_date, active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+            """,
+            (txn_type, amount, category, description.strip(), frequency, frequency_days, start_date, start_date),
+        )
+
     conn = db._connect()
     cur = conn.cursor()
     rec_cols = {row["name"] for row in cur.execute("PRAGMA table_info(recurring_transactions)").fetchall()}
@@ -111,7 +121,7 @@ def toggle_recurring(rec_id: int, active: bool) -> None:
     conn = db._connect()
     conn.execute(
         "UPDATE recurring_transactions SET active = ? WHERE id = ?",
-        (1 if active else 0, rec_id),
+        ((bool(active) if db.using_postgres() else (1 if active else 0)), rec_id),
     )
     conn.commit()
     conn.close()
@@ -161,10 +171,10 @@ def get_upcoming_recurring(days: int = 7) -> list[dict]:
         """
         SELECT id, txn_type, amount, category, description, frequency, next_date
         FROM recurring_transactions
-        WHERE active = 1 AND next_date <= ?
+        WHERE active = ? AND next_date <= ?
         ORDER BY next_date ASC
         """,
-        (cutoff,),
+        ((True if db.using_postgres() else 1), cutoff),
     ).fetchall()
     conn.close()
     result = []
@@ -195,12 +205,15 @@ def apply_due_recurring() -> int:
 
     today = date.today()
     conn = db._connect()
-    rec_cols = {row["name"] for row in conn.execute("PRAGMA table_info(recurring_transactions)").fetchall()}
-    has_next_due = "next_due_date" in rec_cols
+    rec_cols = set()
+    has_next_due = False
+    if not db.using_postgres():
+        rec_cols = {row["name"] for row in conn.execute("PRAGMA table_info(recurring_transactions)").fetchall()}
+        has_next_due = "next_due_date" in rec_cols
     next_expr = "COALESCE(NULLIF(next_date, ''), next_due_date)" if has_next_due else "next_date"
     rows = conn.execute(
-        f"SELECT *, {next_expr} AS due_date FROM recurring_transactions WHERE active = 1 AND {next_expr} <= ?",
-        (today.isoformat(),),
+        f"SELECT *, {next_expr} AS due_date FROM recurring_transactions WHERE active = ? AND {next_expr} <= ?",
+        ((True if db.using_postgres() else 1), today.isoformat()),
     ).fetchall()
     count = 0
     for row in rows:

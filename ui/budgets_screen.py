@@ -9,6 +9,11 @@ from ui.constants import DEFAULT_CATEGORIES, now_month, peso, make_peso
 from utils import calendar_date_from_picker
 
 
+def _dialog_width(page: ft.Page, *, max_width: int = 340, min_width: int = 280) -> int:
+    width = page.width or getattr(page, "window_width", None) or max_width
+    return int(min(max_width, max(min_width, width - 32)))
+
+
 def _open_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
     if hasattr(page, "show_dialog"):
         page.show_dialog(dialog)
@@ -92,6 +97,7 @@ def _open_picker(page: ft.Page, picker: ft.DatePicker, current: date) -> None:
 def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
     """Pre-filled edit dialog for an existing budget limit."""
     peso = make_peso(db.get_currency())  # dynamic currency
+    dialog_width = _dialog_width(page)
     sel_start: list[date] = [datetime.strptime(b.start_date, "%Y-%m-%d").date() if b.start_date else date.today()]
     sel_end:   list[date] = [datetime.strptime(b.end_date,   "%Y-%m-%d").date() if b.end_date   else date.today() + timedelta(days=29)]
 
@@ -190,7 +196,7 @@ def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
             ft.Text(f"Edit Budget — {b.category}", weight=ft.FontWeight.BOLD, size=15),
         ]),
         content=ft.Container(
-            width=340,
+            width=dialog_width,
             content=ft.Column(
                 tight=True,
                 spacing=12,

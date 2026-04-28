@@ -1,5 +1,16 @@
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
+# for Local App
 .\venv\Scripts\Activate.ps1
-
 flet run main.py
+
+# for Web App hosting
+$env:DATABASE_URL="postgresql://postgres:Salipuran321%23@127.0.0.1:5432/ai_budget_tracker"
+.\venv\Scripts\flet.exe run --web --host 0.0.0.0 --port 8550 main.py
+
+# Addresses to connect:
+# for pc browser
+http://127.0.0.1:8550
+
+# for mobile browser
+http://192.168.1.23:8550

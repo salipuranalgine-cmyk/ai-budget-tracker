@@ -6,6 +6,11 @@ import user_manager as um
 from ui.constants import AVATAR_EMOJIS
 
 
+def _dialog_width(page: ft.Page, *, max_width: int = 320, min_width: int = 260) -> int:
+    width = page.width or getattr(page, "window_width", None) or max_width
+    return int(min(max_width, max(min_width, width - 40)))
+
+
 def show_profile_select_screen(
     page: ft.Page,
     content: ft.Container,
@@ -16,6 +21,7 @@ def show_profile_select_screen(
     open_dialog,
     close_dialog,
 ) -> None:
+    compact = (page.width or 0) < 560 if (page.width or 0) else False
     if auto_resume:
         remembered_user = um.get_last_active_user()
         if remembered_user is not None:
@@ -89,52 +95,62 @@ def show_profile_select_screen(
                     elevation=3,
                     content=ft.Container(
                         padding=ft.Padding(14, 12, 10, 12),
-                        content=ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        content=ft.ResponsiveRow(
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             controls=[
-                                ft.Row(
-                                    spacing=14,
-                                    controls=[
-                                        ft.Container(
-                                            width=52,
-                                            height=52,
-                                            border_radius=26,
-                                            bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.CYAN_400),
-                                            alignment=ft.Alignment(0, 0),
-                                            content=ft.Text(user.emoji, size=26),
-                                        ),
-                                        ft.Column(
-                                            spacing=2,
-                                            controls=[
-                                                ft.Text(user.name, size=16, weight=ft.FontWeight.BOLD),
-                                                ft.Text(
-                                                    f"Member since {user.created_at}",
-                                                    size=11,
-                                                    color=ft.Colors.with_opacity(0.38, ft.Colors.ON_SURFACE),
-                                                ),
-                                            ],
-                                        ),
-                                    ],
-                                ),
-                                ft.Row(
-                                    spacing=0,
-                                    controls=[
-                                        ft.ElevatedButton(
-                                            "Select",
-                                            icon=ft.Icons.LOGIN,
-                                            on_click=make_select(user),
-                                            style=ft.ButtonStyle(
-                                                bgcolor=ft.Colors.INDIGO_600,
-                                                color=ft.Colors.WHITE,
+                                ft.Container(
+                                    col={"xs": 12, "sm": 8},
+                                    content=ft.Row(
+                                        spacing=14,
+                                        controls=[
+                                            ft.Container(
+                                                width=52,
+                                                height=52,
+                                                border_radius=26,
+                                                bgcolor=ft.Colors.with_opacity(0.18, ft.Colors.CYAN_400),
+                                                alignment=ft.Alignment(0, 0),
+                                                content=ft.Text(user.emoji, size=26),
                                             ),
-                                        ),
-                                        ft.IconButton(
-                                            ft.Icons.DELETE_OUTLINE,
-                                            icon_color=ft.Colors.RED_300,
-                                            tooltip="Delete profile",
-                                            on_click=make_delete(user),
-                                        ),
-                                    ],
+                                            ft.Column(
+                                                spacing=2,
+                                                expand=True,
+                                                controls=[
+                                                    ft.Text(user.name, size=16, weight=ft.FontWeight.BOLD),
+                                                    ft.Text(
+                                                        f"Member since {user.created_at}",
+                                                        size=11,
+                                                        color=ft.Colors.with_opacity(0.38, ft.Colors.ON_SURFACE),
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                                ft.Container(
+                                    col={"xs": 12, "sm": 4},
+                                    alignment=ft.Alignment(1, 0),
+                                    content=ft.Row(
+                                        wrap=compact,
+                                        alignment=ft.MainAxisAlignment.END,
+                                        spacing=0,
+                                        controls=[
+                                            ft.ElevatedButton(
+                                                "Select",
+                                                icon=ft.Icons.LOGIN,
+                                                on_click=make_select(user),
+                                                style=ft.ButtonStyle(
+                                                    bgcolor=ft.Colors.INDIGO_600,
+                                                    color=ft.Colors.WHITE,
+                                                ),
+                                            ),
+                                            ft.IconButton(
+                                                ft.Icons.DELETE_OUTLINE,
+                                                icon_color=ft.Colors.RED_300,
+                                                tooltip="Delete profile",
+                                                on_click=make_delete(user),
+                                            ),
+                                        ],
+                                    ),
                                 ),
                             ],
                         ),
@@ -204,7 +220,7 @@ def show_profile_select_screen(
             modal=True,
             title=ft.Text("New Profile", weight=ft.FontWeight.BOLD),
             content=ft.Container(
-                width=320,
+                width=_dialog_width(page),
                 content=ft.Column(
                     tight=True,
                     spacing=14,

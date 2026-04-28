@@ -15,6 +15,30 @@ from ui.settings_screen import settings_screen
 from ui.transactions_screen import transactions_screen
 
 
+def _is_web_page(page: ft.Page) -> bool:
+    return bool(getattr(page, "web", False))
+
+
+def _is_compact_width(page: ft.Page, breakpoint: int = 600) -> bool:
+    width = page.width or getattr(page, "window_width", None) or 0
+    return bool(width) and width < breakpoint
+
+
+def _dialog_size(
+    page: ft.Page,
+    *,
+    max_width: int,
+    max_height: int,
+    min_width: int = 300,
+    min_height: int = 320,
+) -> tuple[int, int]:
+    width = page.width or getattr(page, "window_width", None) or max_width
+    height = page.height or getattr(page, "window_height", None) or max_height
+    dialog_width = int(min(max_width, max(min_width, width - 32)))
+    dialog_height = int(min(max_height, max(min_height, height - 80)))
+    return dialog_width, dialog_height
+
+
 def _open_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
     if hasattr(page, "show_dialog"):
         page.show_dialog(dialog)
@@ -42,14 +66,17 @@ def main(page: ft.Page):
     icon_path = Path(__file__).resolve().parent / "assets" / "Icon.ico"
 
     page.title = "AI Smart Saver - Budget Guardian"
-    page.window.icon = str(icon_path)
     page.theme_mode = ft.ThemeMode.DARK
-    page.padding = 12
-    page.window_min_width = 360
-    page.window_min_height = 640
+    page.padding = 10
     page.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.CYAN)
     page.dark_theme = ft.Theme(color_scheme_seed=ft.Colors.INDIGO)
+    if hasattr(page, "window") and not _is_web_page(page):
+        page.window.icon = str(icon_path)
+    if hasattr(page, "window_min_width") and not _is_web_page(page):
+        page.window_min_width = 360
+    if hasattr(page, "window_min_height") and not _is_web_page(page):
+        page.window_min_height = 640
 
     content = ft.Container(expand=True)
     title = ft.Text("AI Smart Saver", weight=ft.FontWeight.BOLD, size=18)
@@ -333,6 +360,14 @@ def main(page: ft.Page):
             notif_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
             selected_ids: set[int] = set()
             selection_mode = [False]
+            panel_width, panel_height = _dialog_size(
+                page,
+                max_width=520,
+                max_height=520,
+                min_width=280,
+                min_height=360,
+            )
+            compact_panel = _is_compact_width(page, 560)
 
             type_meta = {
                 "budget_exceeded": (ft.Icons.ERROR_ROUNDED, "#ef4444"),
@@ -694,22 +729,13 @@ def main(page: ft.Page):
 
             panel_dlg = ft.AlertDialog(
                 modal=True,
-                title=ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                title=ft.Column(
+                    spacing=8,
                     controls=[
-                        ft.Column(
-                            spacing=2,
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
                                 ft.Text("Notifications", weight=ft.FontWeight.BOLD, size=16),
-                                bulk_actions,
-                            ],
-                        ),
-                        ft.Row(
-                            spacing=0,
-                            controls=[
-                                mark_all_btn,
-                                select_btn,
-                                clear_all_btn,
                                 ft.IconButton(
                                     icon=ft.Icons.CLOSE,
                                     icon_size=20,
@@ -717,11 +743,17 @@ def main(page: ft.Page):
                                 ),
                             ],
                         ),
+                        ft.Row(
+                            wrap=True,
+                            spacing=0 if compact_panel else 4,
+                            controls=[mark_all_btn, select_btn, clear_all_btn],
+                        ),
+                        bulk_actions,
                     ],
                 ),
                 content=ft.Container(
-                    width=520,
-                    height=520,
+                    width=panel_width,
+                    height=panel_height,
                     content=notif_list,
                 ),
                 actions=[],
@@ -815,10 +847,11 @@ def main(page: ft.Page):
             height = page.height or 0
             width_changed = abs(width - resize_state["width"]) >= 32
             height_changed = abs(height - resize_state["height"]) >= 48
-            if nav_ref[0].selected_index == 0 and (width_changed or height_changed):
+            if width_changed or height_changed:
                 resize_state["width"] = width
                 resize_state["height"] = height
-                render_ref[0](0)
+                _apply_appbar()
+                render_ref[0](nav_ref[0].selected_index)
 
         page.on_resize = handle_resize
 
@@ -857,27 +890,43 @@ def main(page: ft.Page):
             page.on_resize = None
             show_user_select(auto_resume=False)
 
-        page.appbar = ft.AppBar(
-            title=title,
-            center_title=False,
-            actions=[
-                ft.TextButton(
-                    content=ft.Row(
-                        spacing=6,
-                        tight=True,
-                        controls=[
-                            ft.Text(user.emoji, size=18),
-                            ft.Text(user.name, size=13,
-                                    color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE)),
-                        ],
+        def _apply_appbar() -> None:
+            compact = _is_compact_width(page)
+            title.size = 16 if compact else 18
+            title.max_lines = 1
+            title.overflow = ft.TextOverflow.ELLIPSIS
+            page.appbar = ft.AppBar(
+                title=title,
+                center_title=False,
+                actions=[
+                    ft.TextButton(
+                        content=ft.Row(
+                            spacing=6,
+                            tight=True,
+                            controls=[
+                                ft.Text(user.emoji, size=18),
+                                *(
+                                    []
+                                    if compact
+                                    else [
+                                        ft.Text(
+                                            user.name,
+                                            size=13,
+                                            color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+                                        )
+                                    ]
+                                ),
+                            ],
+                        ),
+                        tooltip=f"Switch profile ({user.name})",
+                        on_click=switch_user,
                     ),
-                    tooltip="Switch profile",
-                    on_click=switch_user,
-                ),
-                bell_button,
-                ft.IconButton(ft.Icons.DARK_MODE, on_click=toggle_theme),
-            ],
-        )
+                    bell_button,
+                    ft.IconButton(ft.Icons.DARK_MODE, tooltip="Toggle theme", on_click=toggle_theme),
+                ],
+            )
+
+        _apply_appbar()
         page.navigation_bar = nav
 
         if not page.controls:

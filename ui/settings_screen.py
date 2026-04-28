@@ -18,9 +18,9 @@ AI_MODE_LABELS = {
 }
 
 ML_SCHEDULE_LABELS = {
-    "daily":   "Daily — retrain every day (best if you log many transactions)",
-    "weekly":  "Weekly — retrain every 7 days (recommended for most users)",
-    "monthly": "Monthly — retrain once a month (light usage / older hardware)",
+    "daily":   "Daily - retrain every day (best if you log many transactions)",
+    "weekly":  "Weekly - retrain every 7 days (recommended for most users)",
+    "monthly": "Monthly - retrain once a month (light usage / older hardware)",
 }
 
 MASK_PREFIX = "*" * 18
@@ -119,7 +119,7 @@ def _status_row(label: str, value: str, value_color=None) -> ft.Control:
 
 # ---------------------------------------------------------------------------
 # ML Status dialog
-# This is the "face" for scikit-learn — shows the user exactly what's
+# This is the "face" for scikit-learn - shows the user exactly what's
 # happening with their ML models, whether they're trained or not, and
 # lets them retrain manually.
 # ---------------------------------------------------------------------------
@@ -134,8 +134,8 @@ def _show_ml_status_dialog(
 
     WHAT IS SHOWN:
     ─────────────
-    • Anomaly Detector status  (IsolationForest — finds unusual transactions)
-    • Spending Forecaster status (LinearRegression — predicts next month)
+    • Anomaly Detector status  (IsolationForest - finds unusual transactions)
+    • Spending Forecaster status (LinearRegression - predicts next month)
     • Last retrain date
     • Next retrain date based on schedule
     • How many expense transactions exist
@@ -345,11 +345,11 @@ def _show_ml_status_dialog(
                     ft.Text(
                         "scikit-learn is a Python machine learning library. "
                         "This app uses two of its models:\n\n"
-                        "• IsolationForest — learns what a normal transaction looks "
+                        "• IsolationForest - learns what a normal transaction looks "
                         "like for YOU, then flags anything that doesn't fit.\n\n"
-                        "• LinearRegression — draws a trend line through your monthly "
+                        "• LinearRegression - draws a trend line through your monthly "
                         "spending history and extends it forward to predict next month.\n\n"
-                        "Both models run 100% locally on your device — "
+                        "Both models run 100% locally on your device -"
                         "no data is ever sent anywhere.",
                         size=11,
                         color=ft.Colors.with_opacity(0.65, ft.Colors.ON_SURFACE),
@@ -913,7 +913,7 @@ def settings_screen(page: ft.Page) -> ft.Control:
                                             ml_badge_chip,
                                         ],
                                     ),
-                                    # "View ML Status" button — your requested button
+                                    # "View ML Status" button - your requested button
                                     ft.OutlinedButton(
                                         "View ML Status",
                                         icon=ft.Icons.MONITOR_HEART_ROUNDED,
@@ -929,7 +929,7 @@ def settings_screen(page: ft.Page) -> ft.Control:
 
                             ft.Text(
                                 "scikit-learn powers two local ML models that run on YOUR device. "
-                                "They learn from your own spending history — no internet needed.",
+                                "They learn from your own spending history no internet needed.",
                                 size=12,
                                 color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
                             ),
@@ -1133,7 +1133,7 @@ def settings_screen(page: ft.Page) -> ft.Control:
                             ),
                             ft.Text(
                                 "Your budget data stays in local SQLite files on this device. "
-                                "ML models (scikit-learn) also run fully locally — your spending "
+                                "ML models (scikit-learn) also run fully locally - your spending "
                                 "history is never sent anywhere for ML processing. "
                                 "If you use cloud AI, only the prompt you send to the model goes over the internet.",
                                 size=12,

@@ -16,10 +16,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-_bg_results: dict[int, str] = {}
+_bg_results: dict[int, list[str]] = {}
 _bg_lock = threading.Lock()
 _pending_sessions: set[int] = set()
-_active_callbacks: dict[int, callable] = {}
+_active_callbacks: dict[int, list[callable]] = {}
 _sessions_meta_lock = threading.Lock()
 
 import pandas as pd
@@ -383,11 +383,33 @@ def _generate_session_title(user_message: str, ai_reply: str) -> str:
 # History dialog
 # ---------------------------------------------------------------------------
 
+def _dialog_size(
+    page: ft.Page,
+    *,
+    max_width: int,
+    max_height: int,
+    min_width: int = 300,
+    min_height: int = 320,
+) -> tuple[int, int]:
+    page_width = page.width or getattr(page, "window_width", None) or max_width
+    page_height = page.height or getattr(page, "window_height", None) or max_height
+    dialog_width = int(min(max_width, max(min_width, page_width - 32)))
+    dialog_height = int(min(max_height, max(min_height, page_height - 80)))
+    return dialog_width, dialog_height
+
+
 def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) -> None:
     sessions_col = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
     storage_text = ft.Text("", size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
     selected_ids: list[int] = []
     session_cards: dict[int, ft.Card] = {}
+    history_width, history_height = _dialog_size(
+        page,
+        max_width=520,
+        max_height=480,
+        min_width=280,
+        min_height=360,
+    )
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -402,13 +424,13 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
             ],
         ),
         content=ft.Container(
-            width=520, height=480,
+            width=history_width, height=history_height,
             content=ft.Column(
                 expand=True, spacing=8,
                 controls=[
                     ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
                         storage_text,
-                        ft.Row(spacing=4, controls=[
+                        ft.Row(wrap=True, spacing=4, controls=[
                             ft.TextButton("+ New Chat", icon=ft.Icons.ADD, on_click=lambda _: _new_chat()),
                             ft.TextButton("🗑️ Clear All", icon=ft.Icons.DELETE_FOREVER,
                                           style=ft.ButtonStyle(color=ft.Colors.RED_400),
@@ -594,7 +616,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 
         edit_dlg = ft.AlertDialog(
             modal=True, title=ft.Text("Edit Session Title", weight=ft.FontWeight.BOLD),
-            content=ft.Container(width=400,
+            content=ft.Container(width=_dialog_size(page, max_width=400, max_height=320, min_width=260, min_height=240)[0],
                                  content=ft.Column(tight=True, spacing=14,
                                                    controls=[ft.Text("Give this conversation a name:", size=13),
                                                              title_field])),
@@ -631,6 +653,8 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     _has_welcome = [not bool(history)]
     bubble_map: list[tuple[int, ft.Control]] = []
     _stop_requested = [False]
+    poller_state = {"active": True}
+    registered_callback: list[callable | None] = [None]
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
 
@@ -727,6 +751,30 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     def _add_ai_bubble(text):
         messages_col.controls.append(_ai_bubble(text))
 
+    def _persisted_history() -> list[dict]:
+        if _has_welcome[0] and conv_history and conv_history[0].get("role") == "assistant":
+            return conv_history[1:]
+        return conv_history
+
+    def _sync_history_rows(rows: list[dict]) -> None:
+        local_persisted = _persisted_history()
+        if len(rows) <= len(local_persisted):
+            return
+
+        missing_rows = rows[len(local_persisted):]
+        for row in missing_rows:
+            hist_idx = len(conv_history)
+            conv_history.append({"role": row["role"], "content": row["content"]})
+            if row["role"] == "assistant":
+                is_typing[0] = False
+                _set_input_enabled(True)
+                if typing_ind in messages_col.controls:
+                    messages_col.controls.remove(typing_ind)
+                _add_ai_bubble(row["content"])
+            else:
+                _add_user_bubble(row["content"], hist_idx)
+        page.update()
+
     for idx, msg in enumerate(conv_history):
         if msg["role"] == "assistant":
             _add_ai_bubble(msg["content"])
@@ -786,16 +834,26 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                     page.update()
                 else:
                     with _bg_lock:
-                        _bg_results[sid] = reply
+                        _bg_results.setdefault(sid, []).append(reply)
             except Exception:
                 with _bg_lock:
-                    _bg_results[sid] = reply
+                    _bg_results.setdefault(sid, []).append(reply)
+        registered_callback[0] = _deliver
         with _sessions_meta_lock:
-            _active_callbacks[sid] = _deliver
+            callbacks = _active_callbacks.setdefault(sid, [])
+            if _deliver not in callbacks:
+                callbacks.append(_deliver)
 
     def _unregister_callback(sid):
         with _sessions_meta_lock:
-            _active_callbacks.pop(sid, None)
+            callbacks = _active_callbacks.get(sid, [])
+            current = registered_callback[0]
+            callbacks = [cb for cb in callbacks if cb is not current]
+            if callbacks:
+                _active_callbacks[sid] = callbacks
+            else:
+                _active_callbacks.pop(sid, None)
+        registered_callback[0] = None
 
     def _ensure_session():
         if current_session[0] is None:
@@ -841,7 +899,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                 notif.scan_ai_reply(reply)
             with _sessions_meta_lock:
                 _pending_sessions.discard(sid)
-                callback = _active_callbacks.get(sid)
+                callbacks = list(_active_callbacks.get(sid, []))
             if _stop_requested[0]:
                 _stop_requested[0] = False
                 return
@@ -850,15 +908,16 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             if len(user_msgs) == 1:
                 title = _generate_session_title(user_msgs[0]["content"], reply)
                 await asyncio.to_thread(db.update_chat_session_title, sid, title)
-            if callback:
+            delivered = False
+            for callback in callbacks:
                 try:
                     callback(reply)
+                    delivered = True
                 except Exception:
-                    with _bg_lock:
-                        _bg_results[sid] = reply
-            else:
+                    continue
+            if not delivered:
                 with _bg_lock:
-                    _bg_results[sid] = reply
+                    _bg_results.setdefault(sid, []).append(reply)
 
         page.run_task(_worker)
 
@@ -904,6 +963,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
 
     def _close():
         dlg.open = False
+        poller_state["active"] = False
         if current_session[0] is not None:
             _unregister_callback(current_session[0])
         page.update()
@@ -911,13 +971,14 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     if session_id is not None:
         _register_callback(session_id)
         with _bg_lock:
-            pending_reply = _bg_results.pop(session_id, None)
-        if pending_reply is not None:
-            already_there = (conv_history and conv_history[-1].get("role") == "assistant"
-                             and conv_history[-1].get("content") == pending_reply)
-            if not already_there:
-                conv_history.append({"role": "assistant", "content": pending_reply})
-                _add_ai_bubble(pending_reply)
+            pending_replies = _bg_results.pop(session_id, [])
+        if pending_replies:
+            for pending_reply in pending_replies:
+                already_there = (conv_history and conv_history[-1].get("role") == "assistant"
+                                 and conv_history[-1].get("content") == pending_reply)
+                if not already_there:
+                    conv_history.append({"role": "assistant", "content": pending_reply})
+                    _add_ai_bubble(pending_reply)
         else:
             with _sessions_meta_lock:
                 worker_running = session_id in _pending_sessions
@@ -926,6 +987,22 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                 _set_input_enabled(False)
                 if typing_ind not in messages_col.controls:
                     messages_col.controls.append(typing_ind)
+
+    async def _poll_session_updates():
+        while poller_state["active"]:
+            await asyncio.sleep(1.0)
+            sid = current_session[0]
+            if sid is None:
+                continue
+            try:
+                rows = await asyncio.to_thread(db.get_chat_messages, sid)
+            except Exception:
+                continue
+            if not poller_state["active"]:
+                return
+            _sync_history_rows(rows)
+
+    page.run_task(_poll_session_updates)
 
     page.overlay.append(dlg)
     dlg.open = True
@@ -1123,6 +1200,10 @@ def _content_surface(
         border=ft.border.all(1, ft.Colors.with_opacity(0.08, accent_color)),
         content=content,
     )
+
+
+def _placeholder_header_action() -> ft.Control:
+    return ft.Container(width=30, height=30)
 
 
 def _build_cashflow_chart(
@@ -1988,10 +2069,47 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     module_grid = ft.ResponsiveRow(spacing=12, run_spacing=12)
     module_shell_refs: dict[str, ft.Ref[ft.Container]] = {}
     module_surface_refs: dict[str, ft.Ref[ft.Container]] = {}
+    dashboard_ref = ft.Ref[ft.Column]()
     drag_state = {"active_id": None}
+    reorder_state = {"armed_id": None}
+    dashboard_modules: dict[str, ft.Control] = {}
+    dashboard_module_specs: dict[str, tuple[dict[str, int], callable]] = {}
 
     def _persist_dashboard_order() -> None:
         db.set_app_meta(_DASHBOARD_ORDER_KEY, json.dumps(module_order))
+
+    def _rebuild_dashboard_grid() -> None:
+        dashboard_modules.clear()
+        module_shell_refs.clear()
+        module_surface_refs.clear()
+        for module_id, (col_spec, builder) in dashboard_module_specs.items():
+            dashboard_modules[module_id] = _wrap_dashboard_module(
+                module_id,
+                col_spec,
+                builder,
+            )
+        module_grid.controls = [
+            dashboard_modules[module_id]
+            for module_id in module_order
+            if module_id in dashboard_modules
+        ]
+
+    def _set_reorder_armed(module_id: str | None) -> None:
+        reorder_state["armed_id"] = module_id
+        _rebuild_dashboard_grid()
+        page.update()
+
+    def _is_mobile_drag_mode() -> bool:
+        width = page.width or getattr(page, "window_width", None) or 0
+        return bool(width) and width < 700
+
+    async def _auto_scroll_dashboard(delta: int) -> None:
+        if dashboard_ref.current is None:
+            return
+        try:
+            await dashboard_ref.current.scroll_to(delta=delta, duration=120)
+        except Exception:
+            return
 
     def _refresh_module_surface(module_id: str, *, hovered: bool = False, drop_target: bool = False) -> None:
         surface = module_surface_refs.get(module_id)
@@ -1999,11 +2117,14 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
             return
 
         active_drag = drag_state["active_id"] == module_id
+        armed_drag = reorder_state["armed_id"] == module_id
         accent = "#38bdf8" if drop_target else "#7dd3fc"
         if drop_target:
             scale = 1.02
         elif active_drag:
             scale = 1.008
+        elif armed_drag:
+            scale = 1.012
         elif hovered:
             scale = 1.01
         else:
@@ -2011,22 +2132,34 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
         surface.current.scale = ft.Scale(scale)
         surface.current.border = ft.border.all(
-            1.8 if drop_target else 1.4 if hovered or active_drag else 1,
-            ft.Colors.with_opacity(0.38 if drop_target else 0.24 if hovered or active_drag else 0.0, accent),
+            1.8 if drop_target else 1.4 if hovered or active_drag or armed_drag else 1,
+            ft.Colors.with_opacity(
+                0.38 if drop_target else 0.24 if hovered or active_drag or armed_drag else 0.0,
+                accent,
+            ),
         )
         surface.current.gradient = ft.LinearGradient(
             begin=ft.Alignment(-1, -1),
             end=ft.Alignment(1, 1),
             colors=[
-                ft.Colors.with_opacity(0.16 if drop_target else 0.10 if hovered or active_drag else 0.0, accent),
-                ft.Colors.with_opacity(0.04 if hovered or drop_target or active_drag else 0.0, ft.Colors.WHITE),
+                ft.Colors.with_opacity(
+                    0.16 if drop_target else 0.10 if hovered or active_drag or armed_drag else 0.0,
+                    accent,
+                ),
+                ft.Colors.with_opacity(
+                    0.04 if hovered or drop_target or active_drag or armed_drag else 0.0,
+                    ft.Colors.WHITE,
+                ),
             ],
         )
         surface.current.shadow = [
             ft.BoxShadow(
                 blur_radius=22 if drop_target else 18 if active_drag else 14,
-                spread_radius=0.8 if drop_target else 0.35 if hovered or active_drag else 0,
-                color=ft.Colors.with_opacity(0.20 if drop_target else 0.14 if hovered or active_drag else 0.0, accent),
+                spread_radius=0.8 if drop_target else 0.35 if hovered or active_drag or armed_drag else 0,
+                color=ft.Colors.with_opacity(
+                    0.20 if drop_target else 0.14 if hovered or active_drag or armed_drag else 0.0,
+                    accent,
+                ),
                 offset=ft.Offset(0, 10 if drop_target else 8 if hovered or active_drag else 0),
             )
         ]
@@ -2036,91 +2169,52 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         page.update()
 
     def _drag_handle(module_id: str) -> ft.Control:
+        armed = reorder_state["armed_id"] == module_id
         return ft.Container(
-            width=30,
-            height=30,
-            border_radius=15,
-            bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.ON_SURFACE),
+            width=34,
+            height=34,
+            border_radius=17,
+            bgcolor=ft.Colors.with_opacity(0.18 if armed else 0.10, "#38bdf8" if armed else ft.Colors.ON_SURFACE),
+            border=ft.border.all(
+                1,
+                ft.Colors.with_opacity(0.45 if armed else 0.12, "#38bdf8" if armed else ft.Colors.WHITE),
+            ),
             alignment=ft.Alignment(0, 0),
             content=ft.Icon(
                 ft.Icons.DRAG_INDICATOR,
-                size=16,
-                color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
+                size=18,
+                color="#7dd3fc" if armed else ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE),
             ),
         )
 
-    def _drag_feedback_preview(module_id: str, feedback_width: int) -> ft.Control:
-        ghost_width = min(170, max(136, feedback_width - 220))
-        left = max(0, feedback_width - ghost_width - 10)
-        label = module_id.replace("_", " ").title()
+    def _drag_feedback_preview(module_id: str, builder) -> ft.Control:
+        preview_card = builder(_placeholder_header_action())
         return ft.Container(
-            width=feedback_width,
-            height=52,
-            content=ft.Stack(
-                width=feedback_width,
-                height=52,
-                controls=[
-                    ft.Container(
-                        left=left,
-                        top=0,
-                        width=ghost_width,
-                        height=38,
-                        border_radius=19,
-                        padding=ft.Padding(left=12, right=12, top=0, bottom=0),
-                        bgcolor=ft.Colors.with_opacity(0.96, "#082f49"),
-                        border=ft.border.all(1, ft.Colors.with_opacity(0.28, "#38bdf8")),
-                        shadow=ft.BoxShadow(
-                            blur_radius=20,
-                            spread_radius=0.5,
-                            color=ft.Colors.with_opacity(0.22, "#38bdf8"),
-                            offset=ft.Offset(0, 10),
-                        ),
-                        content=ft.Row(
-                            alignment=ft.MainAxisAlignment.CENTER,
-                            spacing=8,
-                            controls=[
-                                ft.Icon(ft.Icons.DRAG_INDICATOR, size=15, color="#7dd3fc"),
-                                ft.Text(
-                                    label,
-                                    size=11,
-                                    weight=ft.FontWeight.BOLD,
-                                    color=ft.Colors.WHITE,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
-                                ),
-                            ],
-                        ),
-                    )
-                ],
+            width=320,
+            opacity=0.92,
+            scale=ft.Scale(0.96),
+            shadow=ft.BoxShadow(
+                blur_radius=26,
+                spread_radius=1,
+                color=ft.Colors.with_opacity(0.26, "#38bdf8"),
+                offset=ft.Offset(0, 14),
             ),
-        )
-
-    def _drag_header_overlay(module_id: str, feedback_width: int) -> ft.Control:
-        return ft.Container(
-            left=0,
-            right=0,
-            top=0,
-            height=72,
-            content=ft.Draggable(
-                group="dashboard-module",
-                data=module_id,
-                on_drag_start=lambda e, module=module_id: _on_drag_start(module),
-                on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
-                content=ft.Container(
-                    expand=True,
-                    bgcolor=ft.Colors.TRANSPARENT,
-                ),
-                content_feedback=_drag_feedback_preview(module_id, feedback_width),
-                content_when_dragging=ft.Container(
-                    expand=True,
-                    bgcolor=ft.Colors.TRANSPARENT,
-                ),
+            content=ft.Container(
+                border_radius=24,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                border=ft.border.all(2, ft.Colors.with_opacity(0.42, "#38bdf8")),
+                content=preview_card,
             ),
         )
 
     def _expanded_dialog_size() -> tuple[int, int, int]:
         page_width = page.width or 1100
         page_height = page.height or 760
+        if page_width < 700:
+            dialog_width = int(min(page_width - 24, max(300, page_width * 0.94)))
+            dialog_height = int(min(page_height - 36, max(420, page_height * 0.90)))
+            content_height = max(280, dialog_height - 118)
+            return dialog_width, dialog_height, content_height
         dialog_width = int(min(1040, max(680, page_width * 0.82)))
         dialog_height = int(min(720, max(520, page_height * 0.78)))
         content_height = max(360, dialog_height - 118)
@@ -2181,16 +2275,19 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         module_grid.controls = [dashboard_modules[module_id] for module_id in module_order]
         _persist_dashboard_order()
         drag_state["active_id"] = None
+        reorder_state["armed_id"] = None
         for current_module_id in module_order:
             _refresh_module_surface(current_module_id)
         page.update()
 
     def _on_drag_start(module_id: str) -> None:
         drag_state["active_id"] = module_id
+        reorder_state["armed_id"] = module_id
         _queue_surface_refresh(module_id)
 
     def _on_drag_complete(module_id: str) -> None:
         drag_state["active_id"] = None
+        reorder_state["armed_id"] = None
         for current_module_id in module_order:
             _refresh_module_surface(current_module_id)
         page.update()
@@ -2208,12 +2305,66 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     def _on_module_leave(module_id: str) -> None:
         _queue_surface_refresh(module_id)
 
+    def _module_header_action(module_id: str, builder) -> ft.Control:
+        mobile_mode = _is_mobile_drag_mode()
+        armed = reorder_state["armed_id"] == module_id
+
+        def _arm_drag(_):
+            _set_reorder_armed(module_id)
+            page.snack_bar = ft.SnackBar(
+                ft.Text(
+                    "Reorder unlocked. Drag the handle now."
+                    if mobile_mode else
+                    "Drag this card to reorder it."
+                ),
+                duration=1400,
+            )
+            page.snack_bar.open = True
+            page.update()
+
+        draggable = ft.Draggable(
+            group="dashboard-module",
+            data=module_id,
+            max_simultaneous_drags=1,
+            on_drag_start=lambda e, module=module_id: _on_drag_start(module),
+            on_drag_complete=lambda e, module=module_id: _on_drag_complete(module),
+            content=ft.Container(
+                tooltip="Drag to reorder" if not mobile_mode else "Long-press to unlock, then drag",
+                content=_drag_handle(module_id),
+            ),
+            content_feedback=_drag_feedback_preview(module_id, builder),
+            content_when_dragging=ft.Container(
+                width=34,
+                height=34,
+                border_radius=17,
+                bgcolor=ft.Colors.with_opacity(0.06, "#38bdf8"),
+            ),
+        )
+
+        if not mobile_mode:
+            return draggable
+
+        if armed:
+            return ft.Container(
+                tooltip="Drag to reorder",
+                content=draggable,
+            )
+
+        return ft.GestureDetector(
+            on_long_press_start=_arm_drag,
+            mouse_cursor=ft.MouseCursor.GRAB,
+            content=ft.Container(
+                tooltip="Hold to unlock reordering",
+                content=_drag_handle(module_id),
+            ),
+        )
+
     def _wrap_dashboard_module(module_id: str, col_spec: dict[str, int], builder, feedback_width: int = 420) -> ft.Control:
         shell_ref = ft.Ref[ft.Container]()
         surface_ref = ft.Ref[ft.Container]()
         module_shell_refs[module_id] = shell_ref
         module_surface_refs[module_id] = surface_ref
-        live_content = builder(_drag_handle(module_id))
+        live_content = builder(_module_header_action(module_id, builder))
         clickable_content = ft.Container(
             content=live_content,
             on_click=lambda e, module=module_id: _open_expanded_module(module),
@@ -2238,12 +2389,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                     on_will_accept=lambda e, target=module_id: _on_module_will_accept(e, target),
                     on_leave=lambda e, target=module_id: _on_module_leave(target),
                     on_accept=lambda e, target=module_id: _on_module_drop(e, target),
-                    content=ft.Stack(
-                        controls=[
-                            clickable_content,
-                            _drag_header_overlay(module_id, feedback_width),
-                        ],
-                    ),
+                    content=clickable_content,
                 ),
             ),
         )
@@ -2374,9 +2520,8 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     }
 
-    dashboard_modules = {
-        "daily_trend": _wrap_dashboard_module(
-            "daily_trend",
+    dashboard_module_specs = {
+        "daily_trend": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _chart_card(
                 "Daily Spending Trend",
@@ -2390,8 +2535,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "cashflow_pulse": _wrap_dashboard_module(
-            "cashflow_pulse",
+        "cashflow_pulse": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _chart_card(
                 "Cashflow Pulse",
@@ -2405,8 +2549,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "category_breakdown": _wrap_dashboard_module(
-            "category_breakdown",
+        "category_breakdown": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _chart_card(
                 "Spending by Category",
@@ -2420,8 +2563,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "weekday_rhythm": _wrap_dashboard_module(
-            "weekday_rhythm",
+        "weekday_rhythm": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _chart_card(
                 "Weekday Rhythm",
@@ -2435,8 +2577,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "top_categories": _wrap_dashboard_module(
-            "top_categories",
+        "top_categories": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _chart_card(
                 "Top Categories",
@@ -2450,8 +2591,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "leaderboard": _wrap_dashboard_module(
-            "leaderboard",
+        "leaderboard": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _leaderboard_card(
                 expense_map,
@@ -2460,8 +2600,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "budget_progress": _wrap_dashboard_module(
-            "budget_progress",
+        "budget_progress": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _section_card(
                 "Budget Progress",
@@ -2489,8 +2628,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 ),
             ),
         ),
-        "upcoming_bills": _wrap_dashboard_module(
-            "upcoming_bills",
+        "upcoming_bills": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _section_card(
                 "Upcoming Bills",
@@ -2518,8 +2656,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 ),
             ),
         ),
-        "ml_forecast": _wrap_dashboard_module(
-            "ml_forecast",
+        "ml_forecast": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: build_ml_forecast_card(
                 ml_forecast,
@@ -2529,8 +2666,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 viewport_width=chart_viewport_width,
             ),
         ),
-        "ml_anomalies": _wrap_dashboard_module(
-            "ml_anomalies",
+        "ml_anomalies": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: build_ml_anomaly_card(
                 ml_anomalies,
@@ -2538,8 +2674,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 header_action=header_action,
             ),
         ),
-        "cashflow_table": _wrap_dashboard_module(
-            "cashflow_table",
+        "cashflow_table": (
             {"xs": 12, "sm": 6, "md": 6, "xl": 6},
             lambda header_action: _cashflow_table_card(
                 monthly_cashflow,
@@ -2549,11 +2684,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         ),
     }
 
-    module_grid.controls = [
-        dashboard_modules[module_id]
-        for module_id in module_order
-        if module_id in dashboard_modules
-    ]
+    _rebuild_dashboard_grid()
 
     sections: list[ft.Control] = [
         balance_card,
@@ -2563,6 +2694,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     ]
 
     return ft.Column(
+        ref=dashboard_ref,
         expand=True,
         scroll=ft.ScrollMode.AUTO,
         spacing=12,
