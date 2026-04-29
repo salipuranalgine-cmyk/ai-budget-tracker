@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def init_chat_tables() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     if db.using_postgres():
@@ -52,7 +52,7 @@ def init_chat_tables() -> None:
 
 
 def create_chat_session(title: str = "New Chat") -> int:
-    import database as db
+    from . import database as db
 
     return db.insert_and_get_id(
         "INSERT INTO chat_sessions (title) VALUES (?)",
@@ -61,7 +61,7 @@ def create_chat_session(title: str = "New Chat") -> int:
 
 
 def save_chat_message(session_id: int, role: str, content: str) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -73,7 +73,7 @@ def save_chat_message(session_id: int, role: str, content: str) -> None:
 
 
 def update_chat_session_title(session_id: int, title: str) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("UPDATE chat_sessions SET title = ? WHERE id = ?", (title[:60], session_id))
@@ -82,7 +82,7 @@ def update_chat_session_title(session_id: int, title: str) -> None:
 
 
 def get_chat_sessions() -> list[dict]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -112,7 +112,7 @@ def get_chat_sessions() -> list[dict]:
 
 
 def get_chat_messages(session_id: int) -> list[dict]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -124,7 +124,7 @@ def get_chat_messages(session_id: int) -> list[dict]:
 
 
 def delete_chat_session(session_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
@@ -134,7 +134,7 @@ def delete_chat_session(session_id: int) -> None:
 
 
 def get_chat_storage_kb() -> float:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     row = conn.execute(
@@ -145,7 +145,7 @@ def get_chat_storage_kb() -> float:
 
 
 def delete_all_chat_sessions() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM chat_messages")
@@ -155,7 +155,7 @@ def delete_all_chat_sessions() -> None:
 
 
 def truncate_chat_messages_after_index(session_id: int, keep_count: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     if keep_count <= 0:

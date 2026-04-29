@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import database as db
+from backend import database as db
 import user_manager as um
 
 SQLITE_USERS_DB = Path("users.db")

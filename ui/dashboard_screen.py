@@ -23,7 +23,7 @@ _active_callbacks: dict[int, list[callable]] = {}
 _sessions_meta_lock = threading.Lock()
 
 import pandas as pd
-import database as db
+from backend import database as db
 import notifications as notif
 from ai_insights import chat_with_ai
 from ui.constants import now_month, make_peso

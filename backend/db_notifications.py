@@ -4,7 +4,7 @@ from typing import Sequence
 
 
 def init_notifications_table() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     if db.using_postgres():
@@ -38,7 +38,7 @@ def init_notifications_table() -> None:
 
 
 def add_notification(notif_type: str, title: str, message: str) -> int:
-    import database as db
+    from . import database as db
 
     return db.insert_and_get_id(
         "INSERT INTO notifications (notif_type, title, message) VALUES (?, ?, ?)",
@@ -47,7 +47,7 @@ def add_notification(notif_type: str, title: str, message: str) -> int:
 
 
 def get_notifications() -> list[dict]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -62,7 +62,7 @@ def get_notifications() -> list[dict]:
 
 
 def get_unread_notifications_count() -> int:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     if db.using_postgres():
@@ -78,7 +78,7 @@ def get_unread_notifications_count() -> int:
 
 
 def mark_notification_read(notif_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -90,7 +90,7 @@ def mark_notification_read(notif_id: int) -> None:
 
 
 def mark_all_notifications_read() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -102,7 +102,7 @@ def mark_all_notifications_read() -> None:
 
 
 def delete_notification(notif_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM notifications WHERE id = ?", (notif_id,))
@@ -111,7 +111,7 @@ def delete_notification(notif_id: int) -> None:
 
 
 def delete_notifications(notif_ids: Sequence[int]) -> None:
-    import database as db
+    from . import database as db
 
     ids = [int(notif_id) for notif_id in notif_ids if notif_id is not None]
     if not ids:
@@ -128,7 +128,7 @@ def delete_notifications(notif_ids: Sequence[int]) -> None:
 
 
 def delete_notifications_by_type(notif_type: str) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM notifications WHERE notif_type = ?", (notif_type,))
@@ -137,7 +137,7 @@ def delete_notifications_by_type(notif_type: str) -> None:
 
 
 def clear_all_notifications() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM notifications")
@@ -146,7 +146,7 @@ def clear_all_notifications() -> None:
 
 
 def is_first_run() -> bool:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     row = conn.execute("SELECT value FROM app_meta WHERE key = 'first_run_done'").fetchone()
@@ -155,7 +155,7 @@ def is_first_run() -> bool:
 
 
 def mark_first_run_seen() -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(

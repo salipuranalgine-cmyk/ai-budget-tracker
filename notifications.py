@@ -6,7 +6,7 @@ Types: budget_exceeded, budget_warning, bill_due, ai_insight
 """
 from __future__ import annotations
 from dataclasses import dataclass
-import database as db
+from backend import database as db
 
 # ── Type constants ────────────────────────────────────────────────────────────
 TYPE_BUDGET_EXCEEDED = "budget_exceeded"

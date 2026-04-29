@@ -42,7 +42,7 @@ What gets migrated:
 ## 4. Run the FastAPI server
 
 ```bash
-uvicorn api_server:app --host 0.0.0.0 --port 8000
+uvicorn backend.api_server:app --host 0.0.0.0 --port 8000
 ```
 
 Useful endpoints:
@@ -66,3 +66,4 @@ Useful endpoints:
 - The desktop Flet app still works. If `DATABASE_URL` is set, it uses PostgreSQL instead of SQLite.
 - In PostgreSQL mode, each app profile gets its own schema such as `budget_user_1`, which lets the current desktop code keep working while the backend becomes shared.
 - FastAPI is the backend/API layer only. A true phone app or mobile web UI would still be the next step after this server layer.
+- There is still a tiny root `api_server.py` wrapper, but `backend.api_server:app` is now the cleaner entry point.

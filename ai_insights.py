@@ -26,7 +26,7 @@ _ollama_model_cache: str | None = None
 
 def _get_provider_preference() -> str:
     try:
-        import database as db
+        from backend import database as db
         return db.get_ai_provider_mode()
     except Exception:
         return "smart"

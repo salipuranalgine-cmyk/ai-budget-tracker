@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import flet as ft
 
-import database as db
+from backend import database as db
 import notifications as notif
 import user_manager as um
 from ui.budgets_screen import budgets_screen

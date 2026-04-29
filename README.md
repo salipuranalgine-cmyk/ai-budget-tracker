@@ -103,6 +103,17 @@ Supports 17 currencies with correct symbols and decimal places:
 
 ---
 
+## 📁 Project Structure
+
+- `main.py` - desktop/web Flet app entry point
+- `ui/` - screen modules and UI helpers
+- `backend/` - database backend, API server, and storage access modules
+- `assets/` - icons and static assets
+- `user_data/` - per-user SQLite files when running in local mode
+- `exports/` - CSV exports
+
+---
+
 ## 🗄️ Database Schema (per user)
 
 Each user profile keeps its own isolated data scope. With SQLite that is `budget_user_<id>.db`; with PostgreSQL that is a schema such as `budget_user_<id>`.

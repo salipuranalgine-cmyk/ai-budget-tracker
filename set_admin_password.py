@@ -16,7 +16,7 @@ def _bootstrap_venv_site_packages() -> None:
 
 _bootstrap_venv_site_packages()
 
-import database as db
+from backend import database as db
 import user_manager as um
 
 

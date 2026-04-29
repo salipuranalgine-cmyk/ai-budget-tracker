@@ -15,7 +15,7 @@ def add_transaction(
     description: str = "",
     txn_date: Optional[str] = None,
 ) -> int:
-    import database as db
+    from . import database as db
 
     txn_date = txn_date or datetime.now().strftime("%Y-%m-%d")
     logged_date = datetime.now().strftime("%Y-%m-%d")
@@ -36,7 +36,7 @@ def update_transaction(
     description: str,
     txn_date: str,
 ) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -52,7 +52,7 @@ def update_transaction(
 
 
 def delete_transaction(txn_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
@@ -68,7 +68,7 @@ def get_transactions(
     min_amount: Optional[float] = None,
     max_amount: Optional[float] = None,
 ) -> list[Transaction]:
-    import database as db
+    from . import database as db
 
     query = """
         SELECT id, txn_type, amount, category, description, txn_date,
@@ -115,7 +115,7 @@ def get_transactions(
 
 
 def get_starting_balance() -> float:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     row = conn.execute(
@@ -126,7 +126,7 @@ def get_starting_balance() -> float:
 
 
 def set_starting_balance(amount: float) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -141,7 +141,7 @@ def set_starting_balance(amount: float) -> None:
 
 
 def get_app_meta(key: str, default: Optional[str] = None) -> Optional[str]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     row = conn.execute(
@@ -153,7 +153,7 @@ def get_app_meta(key: str, default: Optional[str] = None) -> Optional[str]:
 
 
 def set_app_meta(key: str, value: str) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -168,7 +168,7 @@ def set_app_meta(key: str, value: str) -> None:
 
 
 def get_balance() -> float:
-    import database as db
+    from . import database as db
 
     today = datetime.now().strftime("%Y-%m-%d")
     conn = db._connect()
@@ -188,7 +188,7 @@ def get_balance() -> float:
 
 
 def get_month_income_total(month: str) -> float:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     row = conn.execute(
@@ -201,7 +201,7 @@ def get_month_income_total(month: str) -> float:
 
 
 def get_month_expense_summary(month: str) -> dict[str, float]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -219,7 +219,7 @@ def get_month_expense_summary(month: str) -> dict[str, float]:
 
 
 def get_expense_summary_range(start_date: str, end_date: str) -> dict[str, float]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -237,7 +237,7 @@ def get_expense_summary_range(start_date: str, end_date: str) -> dict[str, float
 
 
 def get_expenses_last_days(days: int = 30) -> list[tuple[str, float]]:
-    import database as db
+    from . import database as db
 
     cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
     conn = db._connect()
@@ -263,7 +263,7 @@ def set_budget_limit(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> None:
-    import database as db
+    from . import database as db
 
     start_date = start_date or datetime.now().strftime("%Y-%m-%d")
     conn = db._connect()
@@ -285,7 +285,7 @@ def set_budget_limit(
 
 
 def get_budget_limits() -> list[BudgetLimit]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -314,7 +314,7 @@ def get_budget_limits() -> list[BudgetLimit]:
 
 
 def delete_budget_limit(budget_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM budget_limits WHERE id = ?", (budget_id,))
@@ -330,7 +330,7 @@ def update_budget_limit(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -432,6 +432,6 @@ def set_ai_provider_mode(mode: str) -> None:
 
 
 def _meta_connection():
-    import database as db
+    from . import database as db
 
     return db._connect()

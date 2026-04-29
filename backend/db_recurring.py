@@ -32,7 +32,7 @@ def add_recurring_transaction(
     frequency_days: int,
     start_date: str,
 ) -> int:
-    import database as db
+    from . import database as db
 
     if db.using_postgres():
         return db.insert_and_get_id(
@@ -86,7 +86,7 @@ def add_recurring_transaction(
 
 
 def get_recurring_transactions() -> list[RecurringTransaction]:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     rows = conn.execute(
@@ -116,7 +116,7 @@ def get_recurring_transactions() -> list[RecurringTransaction]:
 
 
 def toggle_recurring(rec_id: int, active: bool) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -128,7 +128,7 @@ def toggle_recurring(rec_id: int, active: bool) -> None:
 
 
 def delete_recurring(rec_id: int) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute("DELETE FROM recurring_transactions WHERE id = ?", (rec_id,))
@@ -145,7 +145,7 @@ def update_recurring_transaction(
     frequency_days: int,
     next_date: str,
 ) -> None:
-    import database as db
+    from . import database as db
 
     conn = db._connect()
     conn.execute(
@@ -162,7 +162,7 @@ def update_recurring_transaction(
 
 
 def get_upcoming_recurring(days: int = 7) -> list[dict]:
-    import database as db
+    from . import database as db
 
     today = date.today()
     cutoff = (today + timedelta(days=days)).isoformat()
@@ -201,7 +201,7 @@ def get_upcoming_recurring(days: int = 7) -> list[dict]:
 
 
 def apply_due_recurring() -> int:
-    import database as db
+    from . import database as db
 
     today = date.today()
     conn = db._connect()

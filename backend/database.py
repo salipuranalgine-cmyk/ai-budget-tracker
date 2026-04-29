@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from db_chat import (
+from .db_chat import (
     create_chat_session,
     delete_all_chat_sessions,
     delete_chat_session,
@@ -18,7 +18,7 @@ from db_chat import (
     truncate_chat_messages_after_index,
     update_chat_session_title,
 )
-from db_notifications import (
+from .db_notifications import (
     add_notification,
     clear_all_notifications,
     delete_notification,
@@ -32,7 +32,7 @@ from db_notifications import (
     mark_first_run_seen,
     mark_notification_read,
 )
-from db_recurring import (
+from .db_recurring import (
     add_recurring_transaction,
     apply_due_recurring,
     delete_recurring,
@@ -41,7 +41,7 @@ from db_recurring import (
     toggle_recurring,
     update_recurring_transaction,
 )
-from db_transactions import (
+from .db_transactions import (
     add_transaction,
     delete_budget_limit,
     delete_transaction,

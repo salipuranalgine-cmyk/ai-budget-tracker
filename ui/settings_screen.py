@@ -6,7 +6,7 @@ from typing import Callable
 
 import flet as ft
 
-import database as db
+from backend import database as db
 import ml_engine
 from ui.constants import CURRENCY_LABELS
 

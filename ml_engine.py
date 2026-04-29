@@ -58,7 +58,7 @@ import numpy as np
 import joblib  # saves/loads trained model objects to disk
 
 # ── App imports ───────────────────────────────────────────────────────────────
-import database as db
+from backend import database as db
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 ML_MODELS_DIR = Path("user_data") / "ml_models"

@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 
 import flet as ft
 
-import database as db
+from backend import database as db
 from models import Transaction, RecurringTransaction
 from ui.constants import DEFAULT_CATEGORIES, INCOME_CATEGORIES, now_month, peso, make_peso
 from utils import calendar_date_from_picker
