@@ -826,7 +826,12 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     input_field = ft.TextField(
         hint_text="Ask anything about your budget…",
         border_radius=24, border_color="#334155", focused_border_color="#0ea5e9",
-        text_size=13, expand=True, multiline=False,
+        text_size=13,
+        expand=True,
+        multiline=True,
+        min_lines=1,
+        max_lines=5,
+        content_padding=ft.Padding(left=16, right=16, top=12, bottom=12),
         on_submit=lambda e: _send(e.control.value),
     )
     send_btn = ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color="#0ea5e9",
@@ -990,7 +995,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                 ft.Container(
                     padding=ft.Padding(left=8, right=8, top=8, bottom=8),
                     content=ft.Row(spacing=6,
-                                   vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                   vertical_alignment=ft.CrossAxisAlignment.END,
                                    controls=[input_field, stop_btn, send_btn]),
                 ),
             ]),

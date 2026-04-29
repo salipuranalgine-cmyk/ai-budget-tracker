@@ -5,6 +5,7 @@ Handles multi-user profiles for either local SQLite storage or a shared PostgreS
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,8 @@ USERS_DB = "users.db"
 USER_DATA_DIR = Path("user_data")
 DEFAULT_EMOJI = "🙂"
 LAST_ACTIVE_USER_KEY = "last_active_user_id"
+MASTER_ADMIN_PASSWORD_KEY = "master_admin_password_hash"
+DEFAULT_MASTER_ADMIN_PASSWORD = "Salipuran321"
 
 
 @dataclass
@@ -23,7 +26,25 @@ class UserProfile:
     name: str
     emoji: str
     avatar_image: str | None
+    user_password_hash: str | None
     created_at: str
+
+    @property
+    def requires_user_password(self) -> bool:
+        return bool(self.user_password_hash)
+
+
+def _hash_password(password: str | None) -> str | None:
+    clean = (password or "").strip()
+    if not clean:
+        return None
+    return hashlib.sha256(clean.encode("utf-8")).hexdigest()
+
+
+def _verify_password(raw_password: str | None, stored_hash: str | None) -> bool:
+    if not stored_hash:
+        return True
+    return _hash_password(raw_password) == stored_hash
 
 
 def _connect():
@@ -34,6 +55,22 @@ def _connect():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _ensure_master_admin_password(conn) -> None:
+    default_hash = _hash_password(DEFAULT_MASTER_ADMIN_PASSWORD)
+    row = conn.execute(
+        "SELECT value FROM app_state WHERE key = ?",
+        (MASTER_ADMIN_PASSWORD_KEY,),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            """
+            INSERT INTO app_state(key, value) VALUES(?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (MASTER_ADMIN_PASSWORD_KEY, default_hash),
+        )
 
 
 def init_users_db() -> None:
@@ -47,11 +84,15 @@ def init_users_db() -> None:
                 name TEXT NOT NULL,
                 emoji TEXT NOT NULL DEFAULT '🙂',
                 avatar_image TEXT,
+                user_password_hash TEXT,
+                admin_password_hash TEXT,
                 created_at TEXT DEFAULT to_char(CURRENT_DATE, 'YYYY-MM-DD')
             )
             """
         )
         conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_image TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS user_password_hash TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_password_hash TEXT")
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS users_name_lower_idx
@@ -66,6 +107,7 @@ def init_users_db() -> None:
             )
             """
         )
+        _ensure_master_admin_password(conn)
         conn.commit()
         conn.close()
         return
@@ -73,11 +115,13 @@ def init_users_db() -> None:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS users (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            name         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-            emoji        TEXT    NOT NULL DEFAULT '{DEFAULT_EMOJI}',
-            avatar_image TEXT,
-            created_at   TEXT    DEFAULT (date('now'))
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+            emoji               TEXT    NOT NULL DEFAULT '{DEFAULT_EMOJI}',
+            avatar_image        TEXT,
+            user_password_hash  TEXT,
+            admin_password_hash TEXT,
+            created_at          TEXT    DEFAULT (date('now'))
         )
         """
     )
@@ -89,16 +133,17 @@ def init_users_db() -> None:
         )
         """
     )
-    try:
-        conn.execute(
-            f"ALTER TABLE users ADD COLUMN emoji TEXT NOT NULL DEFAULT '{DEFAULT_EMOJI}'"
-        )
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN avatar_image TEXT")
-    except sqlite3.OperationalError:
-        pass
+    for statement in [
+        f"ALTER TABLE users ADD COLUMN emoji TEXT NOT NULL DEFAULT '{DEFAULT_EMOJI}'",
+        "ALTER TABLE users ADD COLUMN avatar_image TEXT",
+        "ALTER TABLE users ADD COLUMN user_password_hash TEXT",
+        "ALTER TABLE users ADD COLUMN admin_password_hash TEXT",
+    ]:
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError:
+            pass
+    _ensure_master_admin_password(conn)
     conn.commit()
     conn.close()
 
@@ -111,6 +156,7 @@ def _row_to_profile(row) -> UserProfile | None:
         name=row["name"],
         emoji=row["emoji"] or DEFAULT_EMOJI,
         avatar_image=row["avatar_image"],
+        user_password_hash=row["user_password_hash"],
         created_at=row["created_at"],
     )
 
@@ -118,7 +164,11 @@ def _row_to_profile(row) -> UserProfile | None:
 def get_users() -> list[UserProfile]:
     conn = _connect()
     rows = conn.execute(
-        "SELECT id, name, emoji, avatar_image, created_at FROM users ORDER BY name ASC"
+        """
+        SELECT id, name, emoji, avatar_image, user_password_hash, created_at
+        FROM users
+        ORDER BY name ASC
+        """
     ).fetchall()
     conn.close()
     return [profile for row in rows if (profile := _row_to_profile(row)) is not None]
@@ -127,24 +177,35 @@ def get_users() -> list[UserProfile]:
 def get_user_by_id(user_id: int) -> UserProfile | None:
     conn = _connect()
     row = conn.execute(
-        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
+        """
+        SELECT id, name, emoji, avatar_image, user_password_hash, created_at
+        FROM users
+        WHERE id = ?
+        """,
         (user_id,),
     ).fetchone()
     conn.close()
     return _row_to_profile(row)
 
 
-def add_user(name: str, emoji: str = DEFAULT_EMOJI, avatar_image: str | None = None) -> UserProfile:
+def add_user(
+    name: str,
+    emoji: str = DEFAULT_EMOJI,
+    avatar_image: str | None = None,
+    *,
+    user_password: str | None = None,
+) -> UserProfile:
     clean_name = name.strip()
+    user_hash = _hash_password(user_password)
     conn = _connect()
     if db.using_postgres():
         row = conn.execute(
             """
-            INSERT INTO users (name, emoji, avatar_image)
-            VALUES (?, ?, ?)
-            RETURNING id, name, emoji, avatar_image, created_at
+            INSERT INTO users (name, emoji, avatar_image, user_password_hash)
+            VALUES (?, ?, ?, ?)
+            RETURNING id, name, emoji, avatar_image, user_password_hash, created_at
             """,
-            (clean_name, emoji or DEFAULT_EMOJI, avatar_image),
+            (clean_name, emoji or DEFAULT_EMOJI, avatar_image, user_hash),
         ).fetchone()
         conn.commit()
         conn.close()
@@ -155,13 +216,20 @@ def add_user(name: str, emoji: str = DEFAULT_EMOJI, avatar_image: str | None = N
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (name, emoji, avatar_image) VALUES (?, ?, ?)",
-        (clean_name, emoji or DEFAULT_EMOJI, avatar_image),
+        """
+        INSERT INTO users (name, emoji, avatar_image, user_password_hash)
+        VALUES (?, ?, ?, ?)
+        """,
+        (clean_name, emoji or DEFAULT_EMOJI, avatar_image, user_hash),
     )
     conn.commit()
     uid = cur.lastrowid
     row = conn.execute(
-        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
+        """
+        SELECT id, name, emoji, avatar_image, user_password_hash, created_at
+        FROM users
+        WHERE id = ?
+        """,
         (uid,),
     ).fetchone()
     conn.close()
@@ -177,16 +245,36 @@ def update_user(
     name: str,
     emoji: str = DEFAULT_EMOJI,
     avatar_image: str | None = None,
+    user_password: str | None = None,
+    keep_existing_password: bool = True,
 ) -> UserProfile:
+    current = get_user_by_id(user_id)
+    if current is None:
+        raise RuntimeError("User profile not found.")
+
     clean_name = name.strip()
+    user_hash = (
+        current.user_password_hash
+        if keep_existing_password and not (user_password or "").strip()
+        else _hash_password(user_password)
+    )
+
     conn = _connect()
     conn.execute(
-        "UPDATE users SET name = ?, emoji = ?, avatar_image = ? WHERE id = ?",
-        (clean_name, emoji or DEFAULT_EMOJI, avatar_image, user_id),
+        """
+        UPDATE users
+        SET name = ?, emoji = ?, avatar_image = ?, user_password_hash = ?
+        WHERE id = ?
+        """,
+        (clean_name, emoji or DEFAULT_EMOJI, avatar_image, user_hash, user_id),
     )
     conn.commit()
     row = conn.execute(
-        "SELECT id, name, emoji, avatar_image, created_at FROM users WHERE id = ?",
+        """
+        SELECT id, name, emoji, avatar_image, user_password_hash, created_at
+        FROM users
+        WHERE id = ?
+        """,
         (user_id,),
     ).fetchone()
     conn.close()
@@ -194,6 +282,22 @@ def update_user(
     if profile is None:
         raise RuntimeError("Failed to update user profile.")
     return profile
+
+
+def verify_user_password(user: UserProfile, raw_password: str | None) -> bool:
+    return _verify_password(raw_password, user.user_password_hash)
+
+
+def verify_master_admin_password(raw_password: str | None) -> bool:
+    stored_hash = _get_app_state(MASTER_ADMIN_PASSWORD_KEY)
+    return _verify_password(raw_password, stored_hash)
+
+
+def set_master_admin_password(raw_password: str) -> None:
+    clean = (raw_password or "").strip()
+    if not clean:
+        raise ValueError("Master admin password cannot be empty.")
+    _set_app_state(MASTER_ADMIN_PASSWORD_KEY, _hash_password(clean))
 
 
 def _get_app_state(key: str) -> str | None:
