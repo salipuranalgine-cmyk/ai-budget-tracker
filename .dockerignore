@@ -1,0 +1,15 @@
+.git
+.gitignore
+venv/
+__pycache__/
+backend/__pycache__/
+build/
+dist/
+exports/
+user_data/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3

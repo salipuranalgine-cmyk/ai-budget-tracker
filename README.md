@@ -114,6 +114,29 @@ Supports 17 currencies with correct symbols and decimal places:
 
 ---
 
+## 🐳 Docker
+
+For a clean local setup with PostgreSQL included:
+
+```powershell
+docker compose up --build
+```
+
+That runs:
+
+- the Flet web app at `http://localhost:8550`
+- PostgreSQL at `localhost:5432`
+
+If you also want the API container:
+
+```powershell
+docker compose --profile api up --build
+```
+
+More explanation is in [DOCKER_SETUP.md](/C:/Users/jinsa/ai-budget-tracker/DOCKER_SETUP.md).
+
+---
+
 ## 🗄️ Database Schema (per user)
 
 Each user profile keeps its own isolated data scope. With SQLite that is `budget_user_<id>.db`; with PostgreSQL that is a schema such as `budget_user_<id>`.
