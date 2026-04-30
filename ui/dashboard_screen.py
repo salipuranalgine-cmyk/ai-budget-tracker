@@ -1693,6 +1693,97 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         f"\n=== RECURRING ===\n{chr(10).join(rec_lines) or '  (none)'}"
     )
 
+    summary_lines = [
+        f"Today: {today_str} | Currency: {currency_code}",
+        f"Current balance: {peso(balance)} | Starting balance: {peso(starting_balance)}",
+        f"Income this month: {peso(month_income)} | Spent this month: {peso(month_total)} | Net cashflow: {peso(net_cashflow)}",
+        f"Top spending category this month: {biggest_category} ({peso(biggest_value)})",
+        f"Savings rate this month: {savings_rate:.1f}%",
+        "",
+        "Spending by category:",
+        *([f"- {cat}: {peso(amt)}" for cat, amt in expense_map.items()] or ["- No category spending yet"]),
+        "",
+        "Budget status:",
+        *(budget_lines or ["  â€¢ No budget limits set"]),
+    ]
+    rag_seed_documents: list[dict[str, object]] = []
+    all_transactions = db.get_transactions()
+    for txn in all_transactions:
+        rag_seed_documents.append(
+            {
+                "source_type": "transaction",
+                "source_id": str(txn.id),
+                "title": f"{txn.txn_type.title()} - {txn.category} - {txn.txn_date}",
+                "content": (
+                    f"Transaction on {txn.txn_date}. "
+                    f"Type: {txn.txn_type}. "
+                    f"Amount: {peso(txn.amount)}. "
+                    f"Category: {txn.category}. "
+                    f"Description: {txn.description or 'No description provided'}."
+                ),
+                "metadata": {
+                    "txn_type": txn.txn_type,
+                    "category": txn.category,
+                    "txn_date": txn.txn_date,
+                },
+            }
+        )
+    for budget in budget_limits:
+        spent = expense_map.get(budget.category, 0.0)
+        pct = (spent / budget.monthly_limit * 100) if budget.monthly_limit > 0 else 0
+        status = ("Exceeded" if pct >= 100 else "Warning" if pct >= 80
+                  else "On Track" if pct >= 50 else "Good")
+        rag_seed_documents.append(
+            {
+                "source_type": "budget",
+                "source_id": str(budget.id),
+                "title": f"Budget - {budget.category}",
+                "content": (
+                    f"Budget for {budget.category}. "
+                    f"Monthly limit: {peso(budget.monthly_limit)}. "
+                    f"Spent this month: {peso(spent)}. "
+                    f"Usage: {pct:.0f} percent. "
+                    f"Status: {status}. "
+                    f"Duration type: {budget.duration_type}."
+                ),
+                "metadata": {
+                    "category": budget.category,
+                    "status": status,
+                    "duration_type": budget.duration_type,
+                },
+            }
+        )
+    for rec in recurring:
+        rag_seed_documents.append(
+            {
+                "source_type": "recurring",
+                "source_id": str(rec.id),
+                "title": f"Recurring - {rec.category}",
+                "content": (
+                    f"Recurring {rec.txn_type} for {rec.category}. "
+                    f"Amount: {peso(rec.amount)}. "
+                    f"Frequency: {rec.frequency}. "
+                    f"Next date: {rec.next_date}. "
+                    f"Active: {'yes' if rec.active else 'no'}. "
+                    f"Description: {rec.description or 'No description provided'}."
+                ),
+                "metadata": {
+                    "txn_type": rec.txn_type,
+                    "category": rec.category,
+                    "next_date": rec.next_date,
+                    "active": bool(rec.active),
+                },
+            }
+        )
+    try:
+        db.sync_rag_documents("finance_records", rag_seed_documents)
+    except Exception:
+        pass
+    financial_context = {
+        "summary": "\n".join(summary_lines),
+        "rag_source_group": "finance_records",
+    }
+
     def open_ai_chat(_):
         _open_ai_chat(page, financial_context, api_key, None, [])
 
