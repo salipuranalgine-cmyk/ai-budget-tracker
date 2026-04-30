@@ -103,6 +103,18 @@ def show_profile_select_screen(
     profile_count_text = ft.Text(size=24, weight=ft.FontWeight.BOLD)
     protected_count_text = ft.Text(size=24, weight=ft.FontWeight.BOLD)
     mode_banner = ft.Text(size=12, color=ft.Colors.with_opacity(0.70, ft.Colors.ON_SURFACE))
+    search_field = ft.TextField(
+        hint_text="Search profiles",
+        prefix_icon=ft.Icons.SEARCH,
+        border_radius=14,
+        dense=True,
+        expand=True,
+    )
+    clear_search_button = ft.IconButton(
+        icon=ft.Icons.CLOSE,
+        tooltip="Clear search",
+        visible=False,
+    )
     create_profile_button = ft.ElevatedButton(
         "Create New Profile",
         icon=ft.Icons.PERSON_ADD_OUTLINED,
@@ -472,9 +484,16 @@ def show_profile_select_screen(
 
     def rebuild_cards() -> None:
         current_users = um.get_users()
+        query = (search_field.value or "").strip().lower()
+        visible_users = [
+            user for user in current_users
+            if not query or query in user.name.lower()
+        ]
+
         user_cards.controls.clear()
-        profile_count_text.value = str(len(current_users))
-        protected_count_text.value = str(sum(1 for user in current_users if user.requires_user_password))
+        profile_count_text.value = str(len(visible_users))
+        protected_count_text.value = str(sum(1 for user in visible_users if user.requires_user_password))
+        clear_search_button.visible = bool(query)
 
         if not current_users:
             user_cards.controls.append(
@@ -501,7 +520,32 @@ def show_profile_select_screen(
             page.update()
             return
 
-        for user in current_users:
+        if not visible_users:
+            user_cards.controls.append(
+                ft.Container(
+                    padding=24,
+                    border_radius=20,
+                    bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
+                    border=ft.border.all(1, ft.Colors.with_opacity(0.08, "#22d3ee")),
+                    content=ft.Column(
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=8,
+                        controls=[
+                            ft.Text("No matching profiles", size=16, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "Try a different name or clear the search.",
+                                text_align=ft.TextAlign.CENTER,
+                                size=12,
+                                color=ft.Colors.with_opacity(0.58, ft.Colors.ON_SURFACE),
+                            ),
+                        ],
+                    ),
+                )
+            )
+            page.update()
+            return
+
+        for user in visible_users:
             meta_chips = ft.Row(
                 wrap=True,
                 spacing=6,
@@ -753,6 +797,26 @@ def show_profile_select_screen(
         ],
     )
 
+    def _on_search_change(_):
+        rebuild_cards()
+
+    def _clear_search(_):
+        search_field.value = ""
+        rebuild_cards()
+        page.update()
+
+    search_field.on_change = _on_search_change
+    clear_search_button.on_click = _clear_search
+
+    search_bar = ft.Row(
+        spacing=8,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            search_field,
+            clear_search_button,
+        ],
+    )
+
     content.content = ft.Column(
         expand=True,
         scroll=ft.ScrollMode.AUTO,
@@ -760,6 +824,7 @@ def show_profile_select_screen(
         controls=[
             hero,
             summary_strip,
+            search_bar,
             user_cards,
         ],
     )
