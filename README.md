@@ -5,7 +5,7 @@
 ---
 
 ## Screenshots
-<img width="1680" height="1048" alt="AI Smart Saver - Budget Guardian - Brave 4_30_2026 1_36_46 PM" src="https://github.com/user-attachments/assets/ace2b46d-be28-44d1-beff-ba9c2664cfe4" />
+<img width="1680" height="969" alt="AI Smart Saver - Budget Guardian - Brave 4_30_2026 1_36_46 PM" src="https://github.com/user-attachments/assets/b212c2ce-3996-4718-a77d-a385067baf7e" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_10_22 PM" src="https://github.com/user-attachments/assets/48c2217e-9b3b-485d-beea-8433ded7e9e2" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_10_42 PM" src="https://github.com/user-attachments/assets/075b431e-b195-4e41-a37e-6c00cb2f1c5d" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_22_2026 8_10_48 PM" src="https://github.com/user-attachments/assets/ea295c51-3980-4a0d-b8a1-c962fdf3673d" />
