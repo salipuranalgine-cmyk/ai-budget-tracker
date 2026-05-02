@@ -41,6 +41,11 @@ from .db_recurring import (
     toggle_recurring,
     update_recurring_transaction,
 )
+from .db_rag import (
+    init_rag_tables,
+    search_rag_chunks,
+    sync_rag_documents,
+)
 from .db_transactions import (
     add_transaction,
     delete_budget_limit,
@@ -377,6 +382,7 @@ def init_db() -> None:
         )
         conn.commit()
         conn.close()
+        init_rag_tables()
         return
 
     conn = _connect()
@@ -485,3 +491,4 @@ def init_db() -> None:
         )
     conn.commit()
     conn.close()
+    init_rag_tables()

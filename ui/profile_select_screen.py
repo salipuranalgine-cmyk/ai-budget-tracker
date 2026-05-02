@@ -91,13 +91,22 @@ def show_profile_select_screen(
         ],
     )
 
-    avatar_picker = getattr(page, "_profile_avatar_picker", None)
-    if avatar_picker is None:
-        avatar_picker = ft.FilePicker()
+    def _get_avatar_picker():
+        avatar_picker = getattr(page, "_profile_avatar_picker", None)
+        if avatar_picker is not None:
+            return avatar_picker
+        try:
+            avatar_picker = ft.FilePicker()
+        except Exception:
+            return None
         setattr(page, "_profile_avatar_picker", avatar_picker)
         service_registry = getattr(page, "_services", None)
         if service_registry is not None and hasattr(service_registry, "register_service"):
-            service_registry.register_service(avatar_picker)
+            try:
+                service_registry.register_service(avatar_picker)
+            except Exception:
+                return None
+        return avatar_picker
 
     user_cards = ft.Column(spacing=14, scroll=ft.ScrollMode.AUTO)
     profile_count_text = ft.Text(size=24, weight=ft.FontWeight.BOLD)
@@ -137,31 +146,46 @@ def show_profile_select_screen(
 
     def _pick_avatar(on_selected, on_done=None) -> None:
         async def _pick_async():
-            files = await avatar_picker.pick_files(
-                allow_multiple=False,
-                allowed_extensions=["png", "jpg", "jpeg", "webp"],
-                file_type=ft.FilePickerFileType.IMAGE,
-                with_data=True,
-            )
-            if not files:
-                if on_done is not None:
-                    on_done(False)
-                return
-            avatar_bytes = getattr(files[0], "bytes", None)
-            if not avatar_bytes:
-                page.snack_bar = ft.SnackBar(ft.Text("Could not read that image. Try another file."))
+            avatar_picker = _get_avatar_picker()
+            if avatar_picker is None:
+                page.snack_bar = ft.SnackBar(ft.Text("Photo picker is not available in this app mode yet."))
                 page.snack_bar.open = True
                 page.update()
                 if on_done is not None:
                     on_done(False)
                 return
-            on_selected(
-                avatar_bytes
-                if isinstance(avatar_bytes, str)
-                else base64.b64encode(avatar_bytes).decode("utf-8")
-            )
-            if on_done is not None:
-                on_done(True)
+            try:
+                files = await avatar_picker.pick_files(
+                    allow_multiple=False,
+                    allowed_extensions=["png", "jpg", "jpeg", "webp"],
+                    file_type=ft.FilePickerFileType.IMAGE,
+                    with_data=True,
+                )
+                if not files:
+                    if on_done is not None:
+                        on_done(False)
+                    return
+                avatar_bytes = getattr(files[0], "bytes", None)
+                if not avatar_bytes:
+                    page.snack_bar = ft.SnackBar(ft.Text("Could not read that image. Try another file."))
+                    page.snack_bar.open = True
+                    page.update()
+                    if on_done is not None:
+                        on_done(False)
+                    return
+                on_selected(
+                    avatar_bytes
+                    if isinstance(avatar_bytes, str)
+                    else base64.b64encode(avatar_bytes).decode("utf-8")
+                )
+                if on_done is not None:
+                    on_done(True)
+            except Exception:
+                page.snack_bar = ft.SnackBar(ft.Text("Photo picker failed to open. Try again."))
+                page.snack_bar.open = True
+                page.update()
+                if on_done is not None:
+                    on_done(False)
 
         page.run_task(_pick_async)
 
@@ -299,7 +323,6 @@ def show_profile_select_screen(
         avatar_preview = ft.Container()
         avatar_mode_text = ft.Text(size=11, color=ft.Colors.with_opacity(0.58, ft.Colors.ON_SURFACE))
         emoji_row = ft.Row(spacing=8, wrap=True, run_spacing=8)
-        clear_photo_button = ft.TextButton("Use Emoji")
         import_photo_button = ft.OutlinedButton("Import Photo", icon=ft.Icons.IMAGE_OUTLINED)
         save_button = ft.ElevatedButton(
             "Save Changes" if is_edit else "Create Profile",
@@ -315,7 +338,6 @@ def show_profile_select_screen(
             avatar_state["loading"] = is_loading
             import_photo_button.disabled = is_loading
             import_photo_button.text = "Loading photo..." if is_loading else "Import Photo"
-            clear_photo_button.disabled = is_loading or selected_avatar[0] is None
             save_button.disabled = is_loading
             name_field.disabled = is_loading
             if allow_password_edit:
@@ -330,7 +352,6 @@ def show_profile_select_screen(
                 font_size=34,
             )
             avatar_mode_text.value = "Imported photo active" if selected_avatar[0] else "Emoji avatar active"
-            clear_photo_button.disabled = avatar_state["loading"] or selected_avatar[0] is None
 
         def build_emoji_row() -> None:
             emoji_row.controls.clear()
@@ -370,14 +391,6 @@ def show_profile_select_screen(
         def import_photo(_):
             _set_avatar_loading(True)
             _pick_avatar(on_avatar_selected, lambda _: _set_avatar_loading(False))
-
-        def clear_photo(_):
-            if avatar_state["loading"]:
-                return
-            selected_avatar[0] = None
-            build_emoji_row()
-            refresh_avatar_preview()
-            page.update()
 
         def save_profile(_):
             if avatar_state["loading"]:
@@ -431,7 +444,6 @@ def show_profile_select_screen(
             page.snack_bar.open = True
             page.update()
 
-        clear_photo_button.on_click = clear_photo
         import_photo_button.on_click = import_photo
         save_button.on_click = save_profile
         build_emoji_row()
@@ -453,7 +465,7 @@ def show_profile_select_screen(
                             spacing=8,
                             run_spacing=6,
                             alignment=ft.MainAxisAlignment.CENTER,
-                            controls=[import_photo_button, clear_photo_button],
+                            controls=[import_photo_button],
                         ),
                         ft.Text("Avatar emoji", size=12, color=ft.Colors.with_opacity(0.58, ft.Colors.ON_SURFACE)),
                         emoji_row,

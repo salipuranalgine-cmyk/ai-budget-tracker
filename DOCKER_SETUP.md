@@ -24,7 +24,7 @@ docker compose up --build
 That starts:
 
 - the Flet web app on `http://localhost:8550`
-- PostgreSQL on `localhost:5432`
+- PostgreSQL with `pgvector` support on `localhost:5432`
 
 ## Optional API container
 
@@ -46,6 +46,8 @@ Because this app needs more than one service:
 
 - your app
 - your PostgreSQL database
+
+The Docker Postgres image is `pgvector/pgvector:pg16`, which means vector search support is already bundled into the database container for retrieval features.
 
 Compose lets both start together with one command.
 
