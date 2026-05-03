@@ -11,3 +11,7 @@ user.db
 __pycache__/
 *.pyc
 venv/
+
+# Local env / exports
+.env
+exports/

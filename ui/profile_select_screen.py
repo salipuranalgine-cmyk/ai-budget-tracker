@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from time import monotonic
 
 import flet as ft
 
@@ -10,9 +11,46 @@ from ui.constants import AVATAR_EMOJIS
 _PROFILE_HERO_IMAGE = "Icon.ico"
 
 
+def _allow_page_action(page: ft.Page, key: str, cooldown: float = 0.45) -> bool:
+    gates = getattr(page, "_click_gate_until", None)
+    if gates is None:
+        gates = {}
+        setattr(page, "_click_gate_until", gates)
+    now = monotonic()
+    allowed_at = float(gates.get(key, 0.0))
+    if now < allowed_at:
+        return False
+    gates[key] = now + cooldown
+    return True
+
+
+def _begin_modal(page: ft.Page, key: str, cooldown: float = 0.45) -> bool:
+    if not _allow_page_action(page, key, cooldown):
+        return False
+    open_modals = getattr(page, "_open_modal_keys", None)
+    if open_modals is None:
+        open_modals = set()
+        setattr(page, "_open_modal_keys", open_modals)
+    if key in open_modals:
+        return False
+    open_modals.add(key)
+    return True
+
+
+def _end_modal(page: ft.Page, key: str) -> None:
+    open_modals = getattr(page, "_open_modal_keys", None)
+    if open_modals is not None:
+        open_modals.discard(key)
+
+
 def _dialog_width(page: ft.Page, *, max_width: int = 420, min_width: int = 280) -> int:
     width = page.width or getattr(page, "window_width", None) or max_width
     return int(min(max_width, max(min_width, width - 40)))
+
+
+def _dialog_height(page: ft.Page, *, max_height: int, min_height: int = 240, chrome_space: int = 220) -> int:
+    height = page.height or getattr(page, "window_height", None) or max_height
+    return int(min(max_height, max(min_height, height - chrome_space)))
 
 
 def _avatar_view(
@@ -90,6 +128,10 @@ def show_profile_select_screen(
             ft.IconButton(ft.Icons.DARK_MODE, on_click=toggle_theme),
         ],
     )
+
+    def _dismiss_modal(dlg: ft.AlertDialog, key: str) -> None:
+        close_dialog(page, dlg)
+        _end_modal(page, key)
 
     def _get_avatar_picker():
         avatar_picker = getattr(page, "_profile_avatar_picker", None)
@@ -206,6 +248,8 @@ def show_profile_select_screen(
         error_text = ft.Text("", color=ft.Colors.RED_300, size=12, visible=False)
 
         def _submit(_=None):
+            if not _allow_page_action(page, "password_submit", 0.4):
+                return
             value = (password_field.value or "").strip()
             if not value:
                 error_text.value = "Enter the password."
@@ -214,7 +258,7 @@ def show_profile_select_screen(
                 return
             error_text.visible = False
             if on_confirm(value):
-                close_dialog(page, dlg)
+                _dismiss_modal(dlg, "password_prompt")
                 if on_success is not None:
                     on_success()
                 return
@@ -229,9 +273,11 @@ def show_profile_select_screen(
             title=ft.Text(title, weight=ft.FontWeight.BOLD),
             content=ft.Container(
                 width=_dialog_width(page, max_width=360, min_width=280),
+                height=_dialog_height(page, max_height=220, min_height=160, chrome_space=260),
                 content=ft.Column(
                     tight=True,
                     spacing=12,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
                         ft.Text(subtitle, size=12, color=ft.Colors.with_opacity(0.64, ft.Colors.ON_SURFACE)),
                         password_field,
@@ -240,14 +286,18 @@ def show_profile_select_screen(
                 ),
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda _: close_dialog(page, dlg)),
+                ft.TextButton("Cancel", on_click=lambda _: _dismiss_modal(dlg, "password_prompt")),
                 ft.ElevatedButton(confirm_label, icon=ft.Icons.LOCK_OPEN, on_click=_submit),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
+        if not _begin_modal(page, "password_prompt"):
+            return
         open_dialog(page, dlg)
 
     def _attempt_launch(user: um.UserProfile, *, bypass_password: bool = False) -> None:
+        if not _allow_page_action(page, f"launch_profile:{user.id}", 0.55):
+            return
         if bypass_password or not user.requires_user_password:
             launch_main_app(user)
             return
@@ -283,6 +333,8 @@ def show_profile_select_screen(
         )
 
     def _toggle_mode(_):
+        if not _allow_page_action(page, "toggle_mode", 0.4):
+            return
         if is_admin_mode["value"]:
             is_admin_mode["value"] = False
             _apply_mode_state()
@@ -297,6 +349,8 @@ def show_profile_select_screen(
         allow_password_edit: bool,
         password_notice: str | None = None,
     ) -> None:
+        if not _begin_modal(page, "profile_editor"):
+            return
         is_edit = existing_user is not None
         selected_emoji = [um.DEFAULT_EMOJI if existing_user is None else existing_user.emoji]
         selected_avatar = [None if existing_user is None else existing_user.avatar_image]
@@ -393,6 +447,8 @@ def show_profile_select_screen(
             _pick_avatar(on_avatar_selected, lambda _: _set_avatar_loading(False))
 
         def save_profile(_):
+            if not _allow_page_action(page, "profile_save", 0.6):
+                return
             if avatar_state["loading"]:
                 page.snack_bar = ft.SnackBar(ft.Text("Wait for the photo to finish loading first."))
                 page.snack_bar.open = True
@@ -426,7 +482,7 @@ def show_profile_select_screen(
                     selected_avatar[0],
                     user_password=user_password,
                 )
-                close_dialog(page, profile_dlg)
+                _dismiss_modal(profile_dlg, "profile_editor")
                 launch_main_app(new_user)
                 return
 
@@ -438,7 +494,7 @@ def show_profile_select_screen(
                 user_password=user_password if allow_password_edit else None,
                 keep_existing_password=True,
             )
-            close_dialog(page, profile_dlg)
+            _dismiss_modal(profile_dlg, "profile_editor")
             rebuild_cards()
             page.snack_bar = ft.SnackBar(ft.Text("Profile updated."))
             page.snack_bar.open = True
@@ -454,9 +510,11 @@ def show_profile_select_screen(
             title=ft.Text("Edit Profile" if is_edit else "Create Profile", weight=ft.FontWeight.BOLD),
             content=ft.Container(
                 width=_dialog_width(page, max_width=440, min_width=300),
+                height=_dialog_height(page, max_height=560, min_height=280, chrome_space=240),
                 content=ft.Column(
                     tight=True,
                     spacing=16,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
                         ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[avatar_preview]),
                         ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[avatar_mode_text]),
@@ -487,7 +545,7 @@ def show_profile_select_screen(
                 ),
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda _: close_dialog(page, profile_dlg)),
+                ft.TextButton("Cancel", on_click=lambda _: _dismiss_modal(profile_dlg, "profile_editor")),
                 save_button,
             ],
             actions_alignment=ft.MainAxisAlignment.END,
@@ -622,8 +680,12 @@ def show_profile_select_screen(
 
             def make_delete(current=user):
                 def _delete(_):
+                    if not _begin_modal(page, "delete_profile"):
+                        return
                     def confirm_delete(_):
-                        close_dialog(page, confirm_dlg)
+                        if not _allow_page_action(page, "delete_profile_confirm", 0.6):
+                            return
+                        _dismiss_modal(confirm_dlg, "delete_profile")
                         um.delete_user(current.id)
                         rebuild_cards()
                         page.update()
@@ -635,7 +697,7 @@ def show_profile_select_screen(
                             f"Delete {current.name}'s profile and ALL their budget data?\n\nThis cannot be undone."
                         ),
                         actions=[
-                            ft.TextButton("Cancel", on_click=lambda _: close_dialog(page, confirm_dlg)),
+                            ft.TextButton("Cancel", on_click=lambda _: _dismiss_modal(confirm_dlg, "delete_profile")),
                             ft.ElevatedButton(
                                 "Delete",
                                 icon=ft.Icons.DELETE,

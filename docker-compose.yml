@@ -7,10 +7,13 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_budget_tracker
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     ports:
       - "8550:8550"
     volumes:
       - ./assets:/app/assets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   api:
     build: .
@@ -20,11 +23,14 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_budget_tracker
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
     command: ["uvicorn", "backend.api_server:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     profiles:
       - api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   postgres:
     image: pgvector/pgvector:pg16

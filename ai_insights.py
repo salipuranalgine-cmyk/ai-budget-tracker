@@ -7,6 +7,7 @@ Supports both one-shot insight and multi-turn chat.
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from collections.abc import Sequence
@@ -17,7 +18,7 @@ Message = dict[str, str]
 ContextPayload = str | dict[str, object]
 
 DEFAULT_OLLAMA_MODEL = "llama3.2"
-OLLAMA_API_TAGS_URL = "http://127.0.0.1:11434/api/tags"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 _ollama_model_cache: str | None = None
@@ -50,9 +51,13 @@ def _get_provider_order(api_key: str, preference: str | None = None) -> list[str
 # Ollama (offline / local LLM)
 # ---------------------------------------------------------------------------
 
+def _get_ollama_base_url() -> str:
+    return (os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+
+
 def _is_ollama_reachable(timeout: float = 0.75) -> bool:
     try:
-        with urllib.request.urlopen(OLLAMA_API_TAGS_URL, timeout=timeout):
+        with urllib.request.urlopen(f"{_get_ollama_base_url()}/api/tags", timeout=timeout):
             return True
     except Exception:
         return False
@@ -66,7 +71,8 @@ def _pick_ollama_model() -> str:
     try:
         import ollama
 
-        data = ollama.list()
+        client = ollama.Client(host=_get_ollama_base_url())
+        data = client.list()
         if hasattr(data, "models"):
             names = [getattr(m, "model", None) or getattr(m, "name", None) for m in data.models]
         else:
@@ -103,7 +109,8 @@ def _ask_ollama_chat(messages: list[Message]) -> str | None:
     try:
         import ollama
 
-        response = ollama.chat(
+        client = ollama.Client(host=_get_ollama_base_url())
+        response = client.chat(
             model=_pick_ollama_model(),
             messages=messages,
             options={"temperature": 0.35},

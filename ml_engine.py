@@ -95,7 +95,7 @@ def _get_model_dir() -> Path:
     We derive the folder name from the active DB filename so each
     user gets their own isolated model set.
     """
-    db_stem = Path(db.DB_FILE).stem          # e.g. "budget_user_3"
+    db_stem = Path(db.get_user_db()).stem          # e.g. "budget_user_3"
     model_dir = ML_MODELS_DIR / db_stem
     model_dir.mkdir(parents=True, exist_ok=True)
     return model_dir
@@ -689,7 +689,7 @@ def check_and_retrain() -> dict[str, str] | None:
             target=_run_background_retrain,
             args=(db_key,),
             daemon=True,
-            name=f"ml-retrain-{Path(db.DB_FILE).stem}",
+            name=f"ml-retrain-{Path(db.get_user_db()).stem}",
         ).start()
         return {"status": "started"}
     return None

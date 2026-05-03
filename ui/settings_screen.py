@@ -8,6 +8,7 @@ import flet as ft
 
 from backend import database as db
 import ml_engine
+from ui.click_guard import allow_page_action, begin_modal, end_modal
 from ui.constants import CURRENCY_LABELS
 
 
@@ -30,6 +31,11 @@ MASK_PREFIX = "*" * 18
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _bind_page_scope(page: ft.Page) -> None:
+    db_scope = getattr(page, "_user_db_scope", None)
+    if db_scope:
+        db.set_user_db(db_scope)
+
 def _open_dialog(page: ft.Page, dlg: ft.AlertDialog) -> None:
     if hasattr(page, "show_dialog"):
         page.show_dialog(dlg)
@@ -39,12 +45,14 @@ def _open_dialog(page: ft.Page, dlg: ft.AlertDialog) -> None:
         page.update()
 
 
-def _close_dialog(page: ft.Page, dlg: ft.AlertDialog) -> None:
+def _close_dialog(page: ft.Page, dlg: ft.AlertDialog, modal_key: str | None = None) -> None:
     if hasattr(page, "close"):
         page.close(dlg)
     else:
         dlg.open = False
         page.update()
+    if modal_key:
+        end_modal(page, modal_key)
 
 
 def _link_btn(label: str, url: str) -> ft.ElevatedButton:
@@ -128,6 +136,9 @@ def _show_ml_status_dialog(
     page: ft.Page,
     on_status_changed: Callable[[], None] | None = None,
 ) -> None:
+    if not begin_modal(page, "ml_status_dialog"):
+        return
+    _bind_page_scope(page)
     """
     Opens a dialog showing the full status of the scikit-learn ML engine.
     Think of it like a health dashboard for the ML layer.
@@ -161,6 +172,7 @@ def _show_ml_status_dialog(
     )
 
     def _build_status_content():
+        _bind_page_scope(page)
         """Pull fresh status from ml_engine and rebuild the column."""
         status_col.controls.clear()
         s = ml_engine.get_ml_status()
@@ -359,6 +371,7 @@ def _show_ml_status_dialog(
         )
 
     def _do_retrain(_):
+        _bind_page_scope(page)
         """Trigger an immediate retrain and refresh the dialog."""
         retrain_btn.disabled = True
         retrain_btn.text = "Training…"
@@ -372,8 +385,8 @@ def _show_ml_status_dialog(
             retrain_status_text.value = f"Done!\n• {anomaly_msg}\n• {forecast_msg}"
             retrain_status_text.color = ft.Colors.GREEN_400
         except Exception as exc:
-            retrain_status_text.value = f"Error: {exc}"
-            retrain_status_text.color = ft.Colors.RED_400
+                retrain_status_text.value = f"Error: {exc}"
+                retrain_status_text.color = ft.Colors.RED_400
 
         retrain_status_text.visible = True
         retrain_btn.disabled = False
@@ -405,7 +418,7 @@ def _show_ml_status_dialog(
                 ft.IconButton(
                     icon=ft.Icons.CLOSE,
                     icon_size=20,
-                    on_click=lambda _: _close_dialog(page, dlg),
+                    on_click=lambda _: _close_dialog(page, dlg, "ml_status_dialog"),
                 ),
             ],
         ),
@@ -434,7 +447,11 @@ def _show_ml_status_dialog(
         actions=[],
     )
 
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "ml_status_dialog")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +459,8 @@ def _show_ml_status_dialog(
 # ---------------------------------------------------------------------------
 
 def _show_ai_guide(page: ft.Page) -> None:
+    if not begin_modal(page, "ai_guide_dialog"):
+        return
     ollama_cmd = ft.Container(
         padding=10,
         border_radius=8,
@@ -468,7 +487,7 @@ def _show_ai_guide(page: ft.Page) -> None:
                 ft.IconButton(
                     icon=ft.Icons.CLOSE,
                     icon_size=20,
-                    on_click=lambda _: _close_dialog(page, dlg),
+                    on_click=lambda _: _close_dialog(page, dlg, "ai_guide_dialog"),
                 ),
             ],
         ),
@@ -547,7 +566,11 @@ def _show_ai_guide(page: ft.Page) -> None:
         ),
         actions=[],
     )
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "ai_guide_dialog")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +578,25 @@ def _show_ai_guide(page: ft.Page) -> None:
 # ---------------------------------------------------------------------------
 
 def settings_screen(page: ft.Page) -> ft.Control:
+    _bind_page_scope(page)
+
+    def _get_export_picker():
+        export_picker = getattr(page, "_export_csv_picker", None)
+        if export_picker is not None:
+            return export_picker
+        try:
+            export_picker = ft.FilePicker()
+        except Exception:
+            return None
+        setattr(page, "_export_csv_picker", export_picker)
+        service_registry = getattr(page, "_services", None)
+        if service_registry is not None and hasattr(service_registry, "register_service"):
+            try:
+                service_registry.register_service(export_picker)
+            except Exception:
+                return None
+        return export_picker
+
     def toast(msg: str) -> None:
         page.snack_bar = ft.SnackBar(ft.Text(msg))
         page.snack_bar.open = True
@@ -576,10 +618,48 @@ def settings_screen(page: ft.Page) -> ft.Control:
         )
 
     def export_csv(_) -> None:
+        if not allow_page_action(page, "export_csv", 0.8):
+            return
+        _bind_page_scope(page)
         filename = f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        path = Path.cwd() / "exports" / filename
-        saved = db.export_transactions_csv(str(path))
-        toast(f"Exported: {saved}")
+        export_bytes = db.export_transactions_csv_bytes()
+
+        async def _export_async() -> None:
+            picker = _get_export_picker()
+            if picker is None:
+                path = Path.cwd() / "exports" / filename
+                saved = db.export_transactions_csv(str(path))
+                toast(f"Exported: {saved}")
+                return
+
+            try:
+                if getattr(page, "web", False) or page.platform.is_mobile():
+                    await picker.save_file(
+                        file_name=filename,
+                        file_type=ft.FilePickerFileType.CUSTOM,
+                        allowed_extensions=["csv"],
+                        src_bytes=export_bytes,
+                    )
+                    toast("CSV download started.")
+                    return
+
+                picked_path = await picker.save_file(
+                    dialog_title="Save transactions CSV",
+                    file_name=filename,
+                    file_type=ft.FilePickerFileType.CUSTOM,
+                    allowed_extensions=["csv"],
+                )
+                if not picked_path:
+                    toast("CSV export cancelled.")
+                    return
+                Path(picked_path).write_bytes(export_bytes)
+                toast(f"Exported: {picked_path}")
+            except Exception:
+                path = Path.cwd() / "exports" / filename
+                saved = db.export_transactions_csv(str(path))
+                toast(f"Exported: {saved}")
+
+        page.run_task(_export_async)
 
     current_key = db.get_anthropic_api_key()
     current_ai_mode = db.get_ai_provider_mode()
@@ -617,6 +697,9 @@ def settings_screen(page: ft.Page) -> ft.Control:
     )
 
     def save_api_key(_) -> None:
+        if not allow_page_action(page, "save_api_key", 0.6):
+            return
+        _bind_page_scope(page)
         raw = api_key_field.value.strip()
         if raw.startswith(MASK_PREFIX):
             toast("Key unchanged - it is already saved.")
@@ -637,6 +720,9 @@ def settings_screen(page: ft.Page) -> ft.Control:
         page.update()
 
     def clear_api_key(_) -> None:
+        if not allow_page_action(page, "clear_api_key", 0.6):
+            return
+        _bind_page_scope(page)
         api_key_field.value = ""
         db.set_anthropic_api_key("")
         key_status.value = "No API key yet. See the guide below to get started."
@@ -645,6 +731,9 @@ def settings_screen(page: ft.Page) -> ft.Control:
         page.update()
 
     def save_ai_mode(_) -> None:
+        if not allow_page_action(page, "save_ai_mode", 0.6):
+            return
+        _bind_page_scope(page)
         mode = ai_mode_dd.value or "smart"
         db.set_ai_provider_mode(mode)
         ai_mode_status.value = f"Saved. {ai_mode_help_text(mode)}"
@@ -670,6 +759,9 @@ def settings_screen(page: ft.Page) -> ft.Control:
     )
 
     def save_ml_schedule(_) -> None:
+        if not allow_page_action(page, "save_ml_schedule", 0.6):
+            return
+        _bind_page_scope(page)
         schedule = ml_schedule_dd.value or "weekly"
         ml_engine.set_retrain_schedule(schedule)
         ml_schedule_status.value = f"Saved. {ML_SCHEDULE_LABELS.get(schedule, schedule)}"
@@ -696,6 +788,9 @@ def settings_screen(page: ft.Page) -> ft.Control:
     )
 
     def save_currency(_) -> None:
+        if not allow_page_action(page, "save_currency", 0.6):
+            return
+        _bind_page_scope(page)
         code = currency_dd.value or "PHP"
         db.set_currency(code)
         currency_status.value = f"Saved. Now using: {CURRENCY_LABELS.get(code, code)}"
@@ -735,6 +830,7 @@ def settings_screen(page: ft.Page) -> ft.Control:
     )
 
     def refresh_ml_status_ui() -> None:
+        _bind_page_scope(page)
         status = ml_engine.get_ml_status()
         ready = status["anomaly_model_ready"] and status["forecast_model_ready"]
         badge_text = "Both models ready" if ready else "Not trained yet"

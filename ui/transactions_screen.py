@@ -6,8 +6,15 @@ import flet as ft
 
 from backend import database as db
 from models import Transaction, RecurringTransaction
+from ui.click_guard import allow_page_action, begin_modal, end_modal
 from ui.constants import DEFAULT_CATEGORIES, INCOME_CATEGORIES, now_month, peso, make_peso
 from utils import calendar_date_from_picker
+
+
+def _bind_page_scope(page: ft.Page) -> None:
+    db_scope = getattr(page, "_user_db_scope", None)
+    if db_scope:
+        db.set_user_db(db_scope)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +75,7 @@ def _open_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
         page.update()
 
 
-def _close_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
+def _close_dialog(page: ft.Page, dialog: ft.AlertDialog, modal_key: str | None = None) -> None:
     if hasattr(page, "pop_dialog"):
         if page.pop_dialog() is None:
             dialog.open = False
@@ -76,6 +83,8 @@ def _close_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
     else:
         dialog.open = False
         page.update()
+    if modal_key:
+        end_modal(page, modal_key)
 
 
 def _toast(page: ft.Page, text: str) -> None:
@@ -189,6 +198,9 @@ def _build_single_date_picker(
 # ---------------------------------------------------------------------------
 
 def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> None:
+    if not begin_modal(page, "expense_dialog"):
+        return
+    _bind_page_scope(page)
     is_edit = txn is not None
     peso = make_peso(db.get_currency())  # dynamic currency
     dialog_width = _dialog_width(page)
@@ -297,6 +309,7 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
     freq_dd.on_change = on_freq_change
 
     def save(_):
+        _bind_page_scope(page)
         if submit_state["busy"]:
             return
         submit_state["busy"] = True
@@ -359,10 +372,10 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
                 else:
                     _toast(page, f"Expense of {peso(val)} recorded!")
 
-        _close_dialog(page, dlg)
+        _close_dialog(page, dlg, "expense_dialog")
         on_done(was_recurring=is_recurring and not is_edit)
 
-    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg, "expense_dialog"))
     save_btn = ft.ElevatedButton(
         "Save Expense",
         icon=ft.Icons.SAVE,
@@ -444,7 +457,11 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "expense_dialog")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +469,9 @@ def _expense_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> N
 # ---------------------------------------------------------------------------
 
 def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> None:
+    if not begin_modal(page, "income_dialog"):
+        return
+    _bind_page_scope(page)
     is_edit = txn is not None
     peso = make_peso(db.get_currency())  # dynamic currency
     balance = db.get_balance()
@@ -561,6 +581,7 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
     freq_dd.on_change = on_freq_change
 
     def save(_):
+        _bind_page_scope(page)
         if submit_state["busy"]:
             return
         submit_state["busy"] = True
@@ -626,10 +647,10 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
                 else:
                     _toast(page, f"{peso(val)} income added!")
 
-        _close_dialog(page, dlg)
+        _close_dialog(page, dlg, "income_dialog")
         on_done(was_recurring=is_recurring and not is_edit)
 
-    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg, "income_dialog"))
     save_btn = ft.ElevatedButton(
         "Save Income",
         icon=ft.Icons.SAVE,
@@ -708,7 +729,11 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "income_dialog")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -716,8 +741,13 @@ def _income_dialog(page: ft.Page, on_done, txn: Transaction | None = None) -> No
 # ---------------------------------------------------------------------------
 
 def _delete_dialog(page: ft.Page, txn_id: int, on_done) -> None:
+    if not begin_modal(page, "delete_transaction"):
+        return
     def do_delete(_):
-        _close_dialog(page, dlg)
+        if not allow_page_action(page, "confirm_delete_transaction", 0.6):
+            return
+        _bind_page_scope(page)
+        _close_dialog(page, dlg, "delete_transaction")
         db.delete_transaction(txn_id)
         _toast(page, "Transaction deleted.")
         on_done()
@@ -727,7 +757,7 @@ def _delete_dialog(page: ft.Page, txn_id: int, on_done) -> None:
         title=ft.Text("Delete this transaction?"),
         content=ft.Text("This cannot be undone, bro."),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg)),
+            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg, "delete_transaction")),
             ft.ElevatedButton(
                 "Delete",
                 icon=ft.Icons.DELETE,
@@ -737,7 +767,11 @@ def _delete_dialog(page: ft.Page, txn_id: int, on_done) -> None:
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "delete_transaction")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +779,9 @@ def _delete_dialog(page: ft.Page, txn_id: int, on_done) -> None:
 # ---------------------------------------------------------------------------
 
 def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) -> None:
+    if not begin_modal(page, "edit_recurring"):
+        return
+    _bind_page_scope(page)
     peso = make_peso(db.get_currency())  # dynamic currency
     """Dialog to edit an existing recurring transaction's amount, schedule, and details."""
     dialog_width = _dialog_width(page)
@@ -812,6 +849,7 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
     sel_next, next_btn, _ = _build_single_date_picker(page, init_next, btn_icon=ft.Icons.EVENT_REPEAT)
 
     def save(_):
+        _bind_page_scope(page)
         if submit_state["busy"]:
             return
         submit_state["busy"] = True
@@ -853,13 +891,13 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
             frequency_days=freq_days,
             next_date=sel_next[0].isoformat(),
         )
-        _close_dialog(page, dlg)
+        _close_dialog(page, dlg, "edit_recurring")
         _toast(page, f"🔁 Recurring updated — next due {sel_next[0].strftime('%b %d, %Y')}.")
         on_done()
 
     color = ft.Colors.GREEN_400 if is_income else ft.Colors.RED_400
     icon = ft.Icons.SAVINGS if is_income else ft.Icons.RECEIPT_LONG
-    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg))
+    cancel_btn = ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg, "edit_recurring"))
     save_btn = ft.ElevatedButton(
         "Save Changes",
         icon=ft.Icons.SAVE,
@@ -919,7 +957,11 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-    _open_dialog(page, dlg)
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "edit_recurring")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +969,7 @@ def _edit_recurring_dialog(page: ft.Page, rec: RecurringTransaction, on_done) ->
 # ---------------------------------------------------------------------------
 
 def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
+    _bind_page_scope(page)
     rec_list = ft.Column(spacing=8)
 
     def _days_badge(next_date_str: str) -> tuple[ft.Control, str]:
@@ -978,6 +1021,7 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
         return badge, border_color
 
     def refresh_rec():
+        _bind_page_scope(page)
         rec_list.controls.clear()
         recs = db.get_recurring_transactions()
 
@@ -1078,6 +1122,7 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_toggle(rec=r):
                 def _toggle(_):
+                    _bind_page_scope(page)
                     db.toggle_recurring(rec.id, not rec.active)
                     refresh_rec()
                     on_data_changed()
@@ -1085,13 +1130,20 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_delete_rec(rec=r):
                 def _del(_):
+                    if not begin_modal(page, "delete_recurring"):
+                        return
+                    _bind_page_scope(page)
                     label = f"{rec.category} — {peso(rec.amount)} ({FREQ_DISPLAY.get(rec.frequency, rec.frequency)})"
                     def confirm_del(_):
+                        if not allow_page_action(page, "confirm_delete_recurring", 0.6):
+                            return
+                        _bind_page_scope(page)
                         if hasattr(page, "close"):
                             page.close(confirm_dlg)
                         else:
                             confirm_dlg.open = False
                             page.update()
+                        end_modal(page, "delete_recurring")
                         db.delete_recurring(rec.id)
                         refresh_rec()
                         on_data_changed()
@@ -1102,6 +1154,7 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
                         else:
                             confirm_dlg.open = False
                             page.update()
+                        end_modal(page, "delete_recurring")
                     confirm_dlg = ft.AlertDialog(
                         modal=True,
                         title=ft.Row(controls=[
@@ -1124,11 +1177,16 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
                         ],
                         actions_alignment=ft.MainAxisAlignment.END,
                     )
-                    _open_dialog(page, confirm_dlg)
+                    try:
+                        _open_dialog(page, confirm_dlg)
+                    except Exception:
+                        end_modal(page, "delete_recurring")
+                        raise
                 return _del
 
             def make_edit_rec(rec=r):
                 def _edit(_):
+                    _bind_page_scope(page)
                     def done(**_kw):
                         refresh_rec()
                         on_data_changed()
@@ -1270,6 +1328,7 @@ def _build_recurring_section(page: ft.Page, on_data_changed) -> ft.Control:
 # ---------------------------------------------------------------------------
 
 def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
+    _bind_page_scope(page)
     peso = make_peso(db.get_currency())  # dynamic currency
 
     search_field = ft.TextField(label="Search", expand=True)
@@ -1323,12 +1382,14 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
     rec_container = ft.Column(visible=False, spacing=8, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
     def refresh_recurring():
+        _bind_page_scope(page)
         rec_container.controls.clear()
         rec_container.controls.append(
             _build_recurring_section(page, on_data_changed)
         )
 
     def refresh_list(_=None):
+        _bind_page_scope(page)
         date_from = date_from_filter[0]
         date_to = date_to_filter[0]
         if date_from and date_to and date_from > date_to:
@@ -1397,6 +1458,7 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_edit(t=txn):
                 def _edit(_):
+                    _bind_page_scope(page)
                     def done(**_kw):  # **_kw absorbs was_recurring= from dialog
                         refresh_list()
                         on_data_changed()
@@ -1408,6 +1470,7 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_delete(tid=txn.id):
                 def _del(_):
+                    _bind_page_scope(page)
                     def done(**_kw):
                         refresh_list()
                         on_data_changed()
@@ -1534,6 +1597,8 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         page.update()
 
     def open_expense(_):
+        if not allow_page_action(page, "open_expense", 0.45):
+            return
         def done(was_recurring=False):
             refresh_list()
             if was_recurring:
@@ -1549,6 +1614,8 @@ def transactions_screen(page: ft.Page, on_data_changed) -> ft.Control:
         _expense_dialog(page, done)
 
     def open_income(_):
+        if not allow_page_action(page, "open_income", 0.45):
+            return
         def done(was_recurring=False):
             refresh_list()
             if was_recurring:
