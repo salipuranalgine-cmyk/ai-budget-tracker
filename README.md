@@ -378,7 +378,7 @@ Interactive docs: `http://localhost:8000/docs`
 
 ## Admin Password
 
-The default master admin password is `Salipuran321`. Change it immediately after setup:
+Set the master admin password immediately after setup:
 
 ```bash
 python set_admin_password.py
