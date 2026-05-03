@@ -7,14 +7,18 @@ Supports both one-shot insight and multi-turn chat.
 from __future__ import annotations
 
 import json
+import os
+import re
 import urllib.request
+from collections.abc import Sequence
 
 # A message dict used for conversation history
 # {"role": "user" | "assistant", "content": str}
 Message = dict[str, str]
+ContextPayload = str | dict[str, object]
 
 DEFAULT_OLLAMA_MODEL = "llama3.2"
-OLLAMA_API_TAGS_URL = "http://127.0.0.1:11434/api/tags"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 _ollama_model_cache: str | None = None
@@ -47,9 +51,13 @@ def _get_provider_order(api_key: str, preference: str | None = None) -> list[str
 # Ollama (offline / local LLM)
 # ---------------------------------------------------------------------------
 
+def _get_ollama_base_url() -> str:
+    return (os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+
+
 def _is_ollama_reachable(timeout: float = 0.75) -> bool:
     try:
-        with urllib.request.urlopen(OLLAMA_API_TAGS_URL, timeout=timeout):
+        with urllib.request.urlopen(f"{_get_ollama_base_url()}/api/tags", timeout=timeout):
             return True
     except Exception:
         return False
@@ -63,7 +71,8 @@ def _pick_ollama_model() -> str:
     try:
         import ollama
 
-        data = ollama.list()
+        client = ollama.Client(host=_get_ollama_base_url())
+        data = client.list()
         if hasattr(data, "models"):
             names = [getattr(m, "model", None) or getattr(m, "name", None) for m in data.models]
         else:
@@ -100,7 +109,8 @@ def _ask_ollama_chat(messages: list[Message]) -> str | None:
     try:
         import ollama
 
-        response = ollama.chat(
+        client = ollama.Client(host=_get_ollama_base_url())
+        response = client.chat(
             model=_pick_ollama_model(),
             messages=messages,
             options={"temperature": 0.35},
@@ -156,6 +166,103 @@ def _ask_anthropic_chat(
 # System / context prompt builder
 # ---------------------------------------------------------------------------
 
+def _tokenize(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z0-9_]+", (text or "").lower())
+        if len(token) > 1
+    }
+
+
+def _fallback_rank_documents(query: str, documents: Sequence[str], limit: int) -> list[str]:
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return [doc for doc in documents[:limit] if doc]
+
+    scored: list[tuple[int, str]] = []
+    for doc in documents:
+        if not doc:
+            continue
+        doc_tokens = _tokenize(doc)
+        overlap = len(query_tokens & doc_tokens)
+        if overlap > 0:
+            scored.append((overlap, doc))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [doc for _, doc in scored[:limit]]
+
+
+def _retrieve_documents(query: str, documents: Sequence[str], limit: int = 6) -> list[str]:
+    docs = [doc.strip() for doc in documents if isinstance(doc, str) and doc.strip()]
+    if not docs:
+        return []
+    if not query.strip():
+        return docs[:limit]
+
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import linear_kernel
+
+        vectorizer = TfidfVectorizer(stop_words="english")
+        matrix = vectorizer.fit_transform(docs + [query])
+        doc_matrix = matrix[:-1]
+        query_vector = matrix[-1]
+        scores = linear_kernel(query_vector, doc_matrix).flatten()
+        ranked_indices = sorted(
+            range(len(docs)),
+            key=lambda idx: float(scores[idx]),
+            reverse=True,
+        )
+        ranked_docs = [docs[idx] for idx in ranked_indices if float(scores[idx]) > 0]
+        return ranked_docs[:limit] if ranked_docs else _fallback_rank_documents(query, docs, limit)
+    except Exception:
+        return _fallback_rank_documents(query, docs, limit)
+
+
+def _latest_user_message(history: Sequence[Message]) -> str:
+    for message in reversed(history):
+        if message.get("role") == "user":
+            return message.get("content", "")
+    return ""
+
+
+def _resolve_financial_context(financial_context: ContextPayload, history: Sequence[Message]) -> str:
+    if isinstance(financial_context, str):
+        return financial_context
+
+    summary = str(financial_context.get("summary", "")).strip()
+    source_group = str(financial_context.get("rag_source_group", "")).strip()
+    documents = financial_context.get("documents", [])
+    documents = documents if isinstance(documents, list) else []
+    query = _latest_user_message(history)
+    retrieved: list[str] = []
+
+    if source_group:
+        try:
+            from backend import database as db
+
+            retrieved_rows = db.search_rag_chunks(query, source_group=source_group, limit=6)
+            retrieved = [
+                f"{row['title']} | {row['text']}"
+                for row in retrieved_rows
+            ]
+        except Exception:
+            retrieved = []
+
+    if not retrieved:
+        retrieved = _retrieve_documents(query, documents, limit=6)
+
+    sections: list[str] = []
+    if summary:
+        sections.append("=== CURRENT FINANCIAL SUMMARY ===\n" + summary)
+    if retrieved:
+        sections.append("=== RETRIEVED RELEVANT RECORDS ===\n" + "\n".join(f"- {doc}" for doc in retrieved))
+    elif documents:
+        sections.append("=== RETRIEVED RELEVANT RECORDS ===\n- No closely related historical records matched this question.")
+
+    return "\n\n".join(section for section in sections if section).strip()
+
+
 def _build_system_prompt(financial_context: str) -> str:
     return f"""You are a smart, friendly personal finance advisor built into a budget tracking app.
 Your user can be from any country - adapt your language based on their currency and spending context.
@@ -170,6 +277,9 @@ Guidelines:
 - Flag budget issues clearly but kindly
 - Give actionable tips the user can act on right now
 - Do NOT use markdown headers or bold formatting - plain text or bullet points only
+- Treat the "Current Financial Summary" section as the source of truth for exact balances, monthly totals, and current budget status
+- Treat the "Retrieved Relevant Records" section as the historical evidence most relevant to the user's latest question
+- If the retrieved records do not contain enough evidence for a historical claim, say so instead of guessing
 
 NOTIFICATION RULE - If you spot an urgent financial issue (budget exceeded, bill overdue, dangerously low balance, etc.), append this exact tag on its own line at the very end of your reply:
 [NOTIFY: Short Alert Title | One-sentence description of the issue.]
@@ -197,9 +307,9 @@ def _build_initial_prompt() -> str:
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
+def get_ai_insight(expenses_summary: ContextPayload, api_key: str = "") -> str:
     """Legacy one-shot insight (still used if needed)."""
-    system = _build_system_prompt(expenses_summary)
+    system = _build_system_prompt(_resolve_financial_context(expenses_summary, []))
     messages: list[Message] = [{"role": "user", "content": _build_initial_prompt()}]
     ollama_messages = [{"role": "user", "content": system + "\n\n" + _build_initial_prompt()}]
     tried_anthropic = False
@@ -233,7 +343,7 @@ def get_ai_insight(expenses_summary: str, api_key: str = "") -> str:
 
 def chat_with_ai(
     history: list[Message],
-    financial_context: str,
+    financial_context: ContextPayload,
     api_key: str = "",
 ) -> str:
     """
@@ -241,7 +351,7 @@ def chat_with_ai(
     (list of {"role": "user"/"assistant", "content": str}).
     Returns the AI's next reply as a string.
     """
-    system = _build_system_prompt(financial_context)
+    system = _build_system_prompt(_resolve_financial_context(financial_context, history))
     ollama_messages: list[Message] = [{"role": "user", "content": system}] + history
     tried_anthropic = False
 

@@ -1,5 +1,74 @@
 # AI Smart Saver — Budget Guardian
 
+<<<<<<< HEAD
+AI Smart Saver is a multi-profile budgeting app built with Python and Flet. It supports local or PostgreSQL-backed storage, web access for phone testing, AI-assisted finance chat, recurring transactions, dashboard analytics, and a lightweight RAG pipeline backed by PostgreSQL and `pgvector`.
+
+## Features
+
+- Multi-profile budgeting with user passwords and admin mode
+- Dashboard cards for balance, budgets, recurring items, charts, ML insights, and AI chat
+- Income and expense tracking with filters, edit/delete, and CSV export
+- Recurring transaction automation with upcoming bill visibility
+- AI finance assistant with per-profile chat history
+- Retrieval-augmented answers over financial history
+- scikit-learn anomaly detection and spending forecast cards
+- Docker setup for app + PostgreSQL + `pgvector`
+- Responsive Flet web UI for desktop and mobile browsers
+
+## Stack
+
+- Python 3.10+
+- Flet
+- PostgreSQL / SQLite
+- `pgvector`
+- scikit-learn
+- pandas / numpy
+- matplotlib
+- Docker / Docker Compose
+- Ollama and Anthropic integration
+
+## Project Structure
+
+- [main.py](/C:/Users/jinsa/ai-budget-tracker/main.py) - app entrypoint
+- [backend](/C:/Users/jinsa/ai-budget-tracker/backend) - database, chat, RAG, and backend helpers
+- [ui](/C:/Users/jinsa/ai-budget-tracker/ui) - Flet screens and shared UI helpers
+- [assets](/C:/Users/jinsa/ai-budget-tracker/assets) - app icons and web assets
+- [ai_insights.py](/C:/Users/jinsa/ai-budget-tracker/ai_insights.py) - AI response orchestration
+- [ml_engine.py](/C:/Users/jinsa/ai-budget-tracker/ml_engine.py) - local ML models
+- [set_admin_password.py](/C:/Users/jinsa/ai-budget-tracker/set_admin_password.py) - helper for updating the master admin password in PostgreSQL
+
+## Local Run
+
+Desktop mode:
+
+```powershell
+.\venv\Scripts\flet.exe run main.py
+```
+
+Web mode:
+
+```powershell
+.\venv\Scripts\flet.exe run --web --host 0.0.0.0 --port 8550 main.py
+```
+
+## PostgreSQL Mode
+
+Set `DATABASE_URL` before starting the app:
+
+```powershell
+$env:DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/ai_budget_tracker"
+```
+
+Optional for Docker-hosted Ollama access:
+
+```powershell
+$env:OLLAMA_BASE_URL="http://127.0.0.1:11434"
+```
+
+Then run the app in desktop or web mode.
+
+More database notes are in [POSTGRES_FASTAPI_SETUP.md](/C:/Users/jinsa/ai-budget-tracker/POSTGRES_FASTAPI_SETUP.md).
+=======
 > A full-stack personal finance tracker built with Python + Flet, featuring AI-powered chat, scikit-learn ML forecasting and anomaly detection, multi-user profiles, recurring transactions, drag-and-drop dashboards, and both desktop and phone-accessible web modes.
 
 ---
@@ -21,6 +90,7 @@
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_07_10 AM" src="https://github.com/user-attachments/assets/17800db5-756f-423c-8da2-deefbef73b87" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_01_16 AM" src="https://github.com/user-attachments/assets/19a46c6d-20f8-483f-9ffe-fec0764cdbcf" />
 <img width="1680" height="1027" alt="AI Smart Saver - Budget Guardian 4_28_2026 11_01_00 AM" src="https://github.com/user-attachments/assets/22210ce8-9653-45c7-a5d2-ccb3f3c19575" />
+>>>>>>> origin/main
 
 
 ---
@@ -183,10 +253,14 @@ Starts the Flet web app and a PostgreSQL database together:
 docker compose up --build
 ```
 
+<<<<<<< HEAD
+This exposes:
+=======
 | Service | URL |
 |---------|-----|
 | Flet web app | `http://localhost:8550` |
 | PostgreSQL | `localhost:5432` |
+>>>>>>> origin/main
 
 To also start the FastAPI backend:
 
@@ -203,6 +277,27 @@ docker compose --profile api up --build
 
 ## PostgreSQL Mode
 
+<<<<<<< HEAD
+## AI and RAG Notes
+
+- AI chat history is stored per profile
+- Exact values like balances and monthly totals still come from app logic and DB queries
+- Retrieval is used for historical context and semantic finance questions
+- PostgreSQL can use `pgvector` for the vector search path
+- If `pgvector` is unavailable, the app falls back to a non-vector retrieval path
+
+## Admin Password
+
+The app supports a master admin password stored in PostgreSQL.
+
+Update it with:
+
+```powershell
+py set_admin_password.py
+```
+
+If you publish or share this project, change your local credentials and passwords first.
+=======
 For shared access (multiple devices on the same network, phone-friendly):
 
 ```powershell
@@ -212,11 +307,17 @@ flet run --web --host 0.0.0.0 --port 8550 main.py
 ```
 
 To migrate existing SQLite data to PostgreSQL:
+>>>>>>> origin/main
 
 ```bash
 python migrate_sqlite_to_postgres.py
 ```
 
+<<<<<<< HEAD
+- SQLite is still useful for solo local usage
+- PostgreSQL is the better fit for shared/browser access
+- Exported CSV files are meant to be user downloads, not committed artifacts
+=======
 See [POSTGRES_FASTAPI_SETUP.md](POSTGRES_FASTAPI_SETUP.md) for the full guide.
 
 ---
@@ -321,3 +422,4 @@ DO UPDATE SET value = EXCLUDED.value;
 ## License
 
 MIT — feel free to use, modify, and build on this project.
+>>>>>>> origin/main

@@ -1,8 +1,0 @@
-id,type,amount,category,description,date
-7,expense,1000.00,Electricity (Meralco),,2026-04-22
-6,expense,500.00,Clothing / Shopping,,2026-04-22
-5,income,700.00,Gift / Padala,,2026-04-22
-4,income,5000.00,Commission,,2026-04-22
-3,expense,500.00,School Supplies,,2026-04-22
-2,expense,2500.00,Water Bill,,2026-04-21
-1,income,10000.00,Salary / Sweldo,,2026-04-20

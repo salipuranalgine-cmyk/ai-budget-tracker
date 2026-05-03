@@ -5,8 +5,15 @@ from datetime import datetime, date, timedelta
 import flet as ft
 
 from backend import database as db
+from ui.click_guard import allow_page_action, begin_modal, end_modal
 from ui.constants import DEFAULT_CATEGORIES, now_month, peso, make_peso
 from utils import calendar_date_from_picker
+
+
+def _bind_page_scope(page: ft.Page) -> None:
+    db_scope = getattr(page, "_user_db_scope", None)
+    if db_scope:
+        db.set_user_db(db_scope)
 
 
 def _dialog_width(page: ft.Page, *, max_width: int = 340, min_width: int = 280) -> int:
@@ -21,6 +28,16 @@ def _open_dialog(page: ft.Page, dialog: ft.AlertDialog) -> None:
         page.dialog = dialog
         dialog.open = True
         page.update()
+
+
+def _close_dialog(page: ft.Page, dialog: ft.AlertDialog, modal_key: str | None = None) -> None:
+    if hasattr(page, "close"):
+        page.close(dialog)
+    else:
+        dialog.open = False
+        page.update()
+    if modal_key:
+        end_modal(page, modal_key)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +112,9 @@ def _open_picker(page: ft.Page, picker: ft.DatePicker, current: date) -> None:
 # ---------------------------------------------------------------------------
 
 def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
+    if not begin_modal(page, "edit_budget"):
+        return
+    _bind_page_scope(page)
     """Pre-filled edit dialog for an existing budget limit."""
     peso = make_peso(db.get_currency())  # dynamic currency
     dialog_width = _dialog_width(page)
@@ -155,14 +175,10 @@ def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
 
     _refresh_duration()
 
-    def _close(dlg):
-        if hasattr(page, "close"):
-            page.close(dlg)
-        else:
-            dlg.open = False
-            page.update()
-
     def save(_):
+        if not allow_page_action(page, "save_budget_edit", 0.6):
+            return
+        _bind_page_scope(page)
         try:
             val = float(limit_input.value.strip().replace(",", ""))
             if val <= 0:
@@ -186,7 +202,7 @@ def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
             start_date=sel_start[0].isoformat(),
             end_date=sel_end[0].isoformat(),
         )
-        _close(dlg)
+        _close_dialog(page, dlg, "edit_budget")
         on_done()
 
     dlg = ft.AlertDialog(
@@ -222,7 +238,7 @@ def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
             ),
         ),
         actions=[
-            ft.TextButton("Cancel", on_click=lambda _: _close(dlg)),
+            ft.TextButton("Cancel", on_click=lambda _: _close_dialog(page, dlg, "edit_budget")),
             ft.ElevatedButton(
                 "Save Changes",
                 icon=ft.Icons.SAVE,
@@ -232,19 +248,20 @@ def _edit_budget_dialog(page: ft.Page, b, on_done) -> None:
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
-    if hasattr(page, "show_dialog"):
-        page.show_dialog(dlg)
-    else:
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
+    try:
+        _open_dialog(page, dlg)
+    except Exception:
+        end_modal(page, "edit_budget")
+        raise
 
 
 def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
+    _bind_page_scope(page)
     peso = make_peso(db.get_currency())  # dynamic currency
     # ---- Mutable state ----
     sel_start: list[date] = [date.today()]
     sel_end:   list[date] = [date.today() + timedelta(days=29)]
+    save_state = {"busy": False}
 
     # ---- Form fields ----
     category = ft.Dropdown(
@@ -324,6 +341,9 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     # ---- Save ----
     def save_limit(_):
+        if save_state["busy"] or not allow_page_action(page, "save_budget_limit", 0.6):
+            return
+        _bind_page_scope(page)
         try:
             value = float(limit_input.value)
             if value <= 0:
@@ -337,22 +357,26 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
             return
 
         duration_days = (sel_end[0] - sel_start[0]).days + 1
-
-        db.set_budget_limit(
-            category=category.value,
-            monthly_limit=value,
-            duration_type="custom",
-            duration_days=duration_days,
-            start_date=sel_start[0].isoformat(),
-            end_date=sel_end[0].isoformat(),
-        )
-        limit_input.value = ""
-        refresh()
-        on_data_changed()
-        toast(f"Budget set! {sel_start[0].strftime('%b %d')} → {sel_end[0].strftime('%b %d, %Y')}  ({duration_days} days)")
+        save_state["busy"] = True
+        try:
+            db.set_budget_limit(
+                category=category.value,
+                monthly_limit=value,
+                duration_type="custom",
+                duration_days=duration_days,
+                start_date=sel_start[0].isoformat(),
+                end_date=sel_end[0].isoformat(),
+            )
+            limit_input.value = ""
+            refresh()
+            on_data_changed()
+            toast(f"Budget set! {sel_start[0].strftime('%b %d')} → {sel_end[0].strftime('%b %d, %Y')}  ({duration_days} days)")
+        finally:
+            save_state["busy"] = False
 
     # ---- Budget list ----
     def refresh():
+        _bind_page_scope(page)
         budget_list.controls.clear()
         limits = db.get_budget_limits()
         today_str = date.today().isoformat()
@@ -393,6 +417,7 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_edit(budget=b):
                 def _edit(_):
+                    _bind_page_scope(page)
                     def done():
                         refresh()
                         on_data_changed()
@@ -401,22 +426,20 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
             def make_delete(budget=b):
                 def _del(_):
+                    if not begin_modal(page, "delete_budget"):
+                        return
+                    _bind_page_scope(page)
                     def confirm_del(_):
-                        if hasattr(page, "close"):
-                            page.close(confirm_dlg)
-                        else:
-                            confirm_dlg.open = False
-                            page.update()
+                        if not allow_page_action(page, "confirm_delete_budget", 0.6):
+                            return
+                        _bind_page_scope(page)
+                        _close_dialog(page, confirm_dlg, "delete_budget")
                         db.delete_budget_limit(budget.id)
                         refresh()
                         on_data_changed()
                         toast("Budget limit deleted.")
                     def cancel_del(_):
-                        if hasattr(page, "close"):
-                            page.close(confirm_dlg)
-                        else:
-                            confirm_dlg.open = False
-                            page.update()
+                        _close_dialog(page, confirm_dlg, "delete_budget")
                     confirm_dlg = ft.AlertDialog(
                         modal=True,
                         title=ft.Row(controls=[
@@ -436,10 +459,14 @@ def budgets_screen(page: ft.Page, on_data_changed) -> ft.Control:
                                 on_click=confirm_del,
                                 style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
                             ),
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END,
+                          ],
+                          actions_alignment=ft.MainAxisAlignment.END,
                     )
-                    _open_dialog(page, confirm_dlg)
+                    try:
+                        _open_dialog(page, confirm_dlg)
+                    except Exception:
+                        end_modal(page, "delete_budget")
+                        raise
                 return _del
             start_fmt = datetime.strptime(start, "%Y-%m-%d").strftime("%b %d") if start else "—"
             end_fmt   = datetime.strptime(end,   "%Y-%m-%d").strftime("%b %d, %Y") if end else "—"

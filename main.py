@@ -10,6 +10,7 @@ import notifications as notif
 import user_manager as um
 from ui.budgets_screen import budgets_screen
 from ui.dashboard_screen import dashboard_screen
+from ui.click_guard import allow_page_action, begin_modal, end_modal
 from ui.profile_select_screen import show_profile_select_screen
 from ui.settings_screen import settings_screen
 from ui.transactions_screen import transactions_screen
@@ -86,6 +87,8 @@ def main(page: ft.Page):
     render_ref: list[Callable[[int], None] | None] = [None]
 
     def toggle_theme(_):
+        if not allow_page_action(page, "toggle_theme", 0.25):
+            return
         page.theme_mode = (
             ft.ThemeMode.LIGHT if page.theme_mode == ft.ThemeMode.DARK else ft.ThemeMode.DARK
         )
@@ -110,8 +113,15 @@ def main(page: ft.Page):
     def launch_main_app(user: um.UserProfile):
         """Initialize the budget app for the selected user profile."""
         um.set_last_active_user(user.id)
-        db.set_user_db(um.get_db_path(user.id))
+        user_db_scope = um.get_db_path(user.id)
+
+        def _bind_user_scope() -> None:
+            db.set_user_db(user_db_scope)
+
+        setattr(page, "_user_db_scope", user_db_scope)
+        _bind_user_scope()
         db.init_db()
+        db.init_chat_tables()
         db.init_notifications_table()
         applied = db.apply_due_recurring()
 
@@ -126,6 +136,7 @@ def main(page: ft.Page):
         badge_dot  = ft.Ref[ft.Container]()
 
         def _refresh_bell():
+            _bind_user_scope()
             count = notif.unread_count()
             if badge_text.current:
                 badge_text.current.value   = str(count) if count < 100 else "99+"
@@ -143,6 +154,7 @@ def main(page: ft.Page):
 
         # ── Notification panel dialog ────────────────────────────────────────
         def _open_notif_panel(_=None):
+            _bind_user_scope()
             notif_list = ft.Column(
                 spacing=8,
                 scroll=ft.ScrollMode.AUTO,
@@ -158,6 +170,7 @@ def main(page: ft.Page):
             }
 
             def _rebuild_list():
+                _bind_user_scope()
                 notif_list.controls.clear()
                 all_notifs = notif.get_all()
                 if not all_notifs:
@@ -186,6 +199,7 @@ def main(page: ft.Page):
                         )
                         def _make_dismiss(nid):
                             def _dismiss(_):
+                                _bind_user_scope()
                                 notif.mark_read(nid)
                                 _rebuild_list()
                                 page.update()
@@ -296,10 +310,12 @@ def main(page: ft.Page):
                     pass
 
             def _mark_all(_):
+                _bind_user_scope()
                 notif.mark_all_read()
                 _rebuild_list()
 
             def _clear_all(_):
+                _bind_user_scope()
                 notif.clear_all()
                 _rebuild_list()
 
@@ -357,6 +373,9 @@ def main(page: ft.Page):
 
         # ── Bell button widget ───────────────────────────────────────────────
         def _open_notif_panel_v2(_=None):
+            if not begin_modal(page, "notifications_panel"):
+                return
+            _bind_user_scope()
             notif_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
             selected_ids: set[int] = set()
             selection_mode = [False]
@@ -437,6 +456,7 @@ def main(page: ft.Page):
                 _rebuild_list()
 
             def _select_all(_=None) -> None:
+                _bind_user_scope()
                 for item in notif.get_all():
                     selected_ids.add(item.id)
                 _rebuild_list()
@@ -446,10 +466,12 @@ def main(page: ft.Page):
                 _rebuild_list()
 
             def _mark_all(_=None) -> None:
+                _bind_user_scope()
                 notif.mark_all_read()
                 _rebuild_list()
 
             def _delete_one(item) -> None:
+                _bind_user_scope()
                 selected_ids.discard(item.id)
                 notif.delete(item.id)
                 _rebuild_list()
@@ -463,6 +485,7 @@ def main(page: ft.Page):
                 )
 
             def _delete_selected_now() -> None:
+                _bind_user_scope()
                 notif.delete_selected(list(selected_ids))
                 selected_ids.clear()
                 selection_mode[0] = False
@@ -480,6 +503,7 @@ def main(page: ft.Page):
                 )
 
             def _clear_all_now() -> None:
+                _bind_user_scope()
                 selected_ids.clear()
                 selection_mode[0] = False
                 notif.clear_all()
@@ -494,6 +518,7 @@ def main(page: ft.Page):
                 )
 
             def _rebuild_list() -> None:
+                _bind_user_scope()
                 notif_list.controls.clear()
                 all_notifs = notif.get_all()
 
@@ -536,6 +561,7 @@ def main(page: ft.Page):
 
                         def _make_mark_read(nid: int):
                             def _mark_read_one(_):
+                                _bind_user_scope()
                                 notif.mark_read(nid)
                                 _rebuild_list()
                             return _mark_read_one
@@ -761,6 +787,7 @@ def main(page: ft.Page):
 
             def _close_panel() -> None:
                 panel_dlg.open = False
+                end_modal(page, "notifications_panel")
                 page.update()
 
             if panel_dlg not in page.overlay:
@@ -803,6 +830,7 @@ def main(page: ft.Page):
 
         # ── Data changed handler — refresh notifications on every change ──────
         def on_data_changed():
+            _bind_user_scope()
             # Re-scan budgets + bills whenever data changes
             currency_code = db.get_currency()
             expense_map   = db.get_month_expense_summary(
@@ -817,6 +845,7 @@ def main(page: ft.Page):
                 render(nav_ref[0].selected_index)
 
         def render(index: int):
+            _bind_user_scope()
             if index == 0:
                 title.value = "Dashboard"
                 content.content = dashboard_screen(page, on_data_changed)
@@ -833,6 +862,7 @@ def main(page: ft.Page):
         render_ref[0] = render
 
         def nav_change(e: ft.ControlEvent):
+            _bind_user_scope()
             render(e.control.selected_index)
 
         resize_state = {
@@ -841,6 +871,7 @@ def main(page: ft.Page):
         }
 
         def handle_resize(_):
+            _bind_user_scope()
             if nav_ref[0] is None or render_ref[0] is None:
                 return
             width = page.width or 0
@@ -883,6 +914,8 @@ def main(page: ft.Page):
 
         def switch_user(_):
             """Return to the profile selection screen."""
+            if not allow_page_action(page, "switch_user", 0.5):
+                return
             notif.unsubscribe(_refresh_bell)
             notif.reset()
             nav_ref[0] = None
@@ -948,6 +981,7 @@ def main(page: ft.Page):
         render(0)
 
         # Generate initial notifications after first render
+        _bind_user_scope()
         expense_map   = db.get_month_expense_summary(
             __import__("datetime").date.today().strftime("%Y-%m")
         )
@@ -964,6 +998,7 @@ def main(page: ft.Page):
             page.snack_bar.open = True
             page.update()
 
+        _bind_user_scope()
         if db.is_first_run():
             intro = ft.AlertDialog(
                 modal=True,
@@ -983,6 +1018,7 @@ def main(page: ft.Page):
                 ],
             )
             _open_dialog(page, intro)
+            _bind_user_scope()
             db.mark_first_run_seen()
 
     # ── STARTUP ──────────────────────────────────────────────────────────────

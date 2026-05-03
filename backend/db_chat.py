@@ -54,6 +54,7 @@ def init_chat_tables() -> None:
 def create_chat_session(title: str = "New Chat") -> int:
     from . import database as db
 
+    init_chat_tables()
     return db.insert_and_get_id(
         "INSERT INTO chat_sessions (title) VALUES (?)",
         (title,),
@@ -63,6 +64,7 @@ def create_chat_session(title: str = "New Chat") -> int:
 def save_chat_message(session_id: int, role: str, content: str) -> None:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     conn.execute(
         "INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)",
@@ -75,6 +77,7 @@ def save_chat_message(session_id: int, role: str, content: str) -> None:
 def update_chat_session_title(session_id: int, title: str) -> None:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     conn.execute("UPDATE chat_sessions SET title = ? WHERE id = ?", (title[:60], session_id))
     conn.commit()
@@ -84,6 +87,7 @@ def update_chat_session_title(session_id: int, title: str) -> None:
 def get_chat_sessions() -> list[dict]:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     rows = conn.execute(
         """
@@ -114,6 +118,7 @@ def get_chat_sessions() -> list[dict]:
 def get_chat_messages(session_id: int) -> list[dict]:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     rows = conn.execute(
         "SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id ASC",
@@ -126,6 +131,7 @@ def get_chat_messages(session_id: int) -> list[dict]:
 def delete_chat_session(session_id: int) -> None:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
     conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
@@ -136,6 +142,7 @@ def delete_chat_session(session_id: int) -> None:
 def get_chat_storage_kb() -> float:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     row = conn.execute(
         "SELECT COALESCE(SUM(LENGTH(content)), 0) AS total FROM chat_messages"
@@ -147,6 +154,7 @@ def get_chat_storage_kb() -> float:
 def delete_all_chat_sessions() -> None:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     conn.execute("DELETE FROM chat_messages")
     conn.execute("DELETE FROM chat_sessions")
@@ -157,6 +165,7 @@ def delete_all_chat_sessions() -> None:
 def truncate_chat_messages_after_index(session_id: int, keep_count: int) -> None:
     from . import database as db
 
+    init_chat_tables()
     conn = db._connect()
     if keep_count <= 0:
         conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))

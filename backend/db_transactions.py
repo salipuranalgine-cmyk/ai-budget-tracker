@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -78,8 +79,8 @@ def get_transactions(
     """
     params: list[object] = []
     if search:
-        query += " AND (description LIKE ? OR category LIKE ?)"
-        like = f"%{search}%"
+        query += " AND (LOWER(COALESCE(description, '')) LIKE ? OR LOWER(COALESCE(category, '')) LIKE ?)"
+        like = f"%{search.lower()}%"
         params.extend([like, like])
     if category and category != "All":
         query += " AND category = ?"
@@ -347,17 +348,23 @@ def update_budget_limit(
 
 
 def export_transactions_csv(path: str) -> str:
-    txns = get_transactions()
+    export_bytes = export_transactions_csv_bytes()
     export_path = Path(path)
     export_path.parent.mkdir(parents=True, exist_ok=True)
-    with export_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "type", "amount", "category", "description", "date"])
-        for txn in txns:
-            writer.writerow(
-                [txn.id, txn.txn_type, f"{txn.amount:.2f}", txn.category, txn.description, txn.txn_date]
-            )
+    export_path.write_bytes(export_bytes)
     return str(export_path)
+
+
+def export_transactions_csv_bytes() -> bytes:
+    txns = get_transactions()
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(["id", "type", "amount", "category", "description", "date"])
+    for txn in txns:
+        writer.writerow(
+            [txn.id, txn.txn_type, f"{txn.amount:.2f}", txn.category, txn.description, txn.txn_date]
+        )
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 def get_currency() -> str:

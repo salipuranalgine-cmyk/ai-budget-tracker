@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import sqlite3
@@ -41,11 +42,17 @@ from .db_recurring import (
     toggle_recurring,
     update_recurring_transaction,
 )
+from .db_rag import (
+    init_rag_tables,
+    search_rag_chunks,
+    sync_rag_documents,
+)
 from .db_transactions import (
     add_transaction,
     delete_budget_limit,
     delete_transaction,
     export_transactions_csv,
+    export_transactions_csv_bytes,
     get_ai_provider_mode,
     get_anthropic_api_key,
     get_app_meta,
@@ -69,6 +76,7 @@ from .db_transactions import (
 )
 
 DB_FILE = "budget.db"
+_db_file_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("db_file", default=DB_FILE)
 _POSTGRES_PREFIXES = ("postgres://", "postgresql://")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -83,8 +91,11 @@ def using_postgres() -> bool:
 
 
 def set_user_db(path: str) -> None:
-    global DB_FILE
-    DB_FILE = path
+    _db_file_ctx.set(path)
+
+
+def get_user_db() -> str:
+    return _db_file_ctx.get()
 
 
 def user_schema_name(user_id: int) -> str:
@@ -92,7 +103,7 @@ def user_schema_name(user_id: int) -> str:
 
 
 def get_active_scope_name() -> str:
-    raw = DB_FILE
+    raw = get_user_db()
     if raw.endswith(".db") or "\\" in raw or "/" in raw:
         raw = Path(raw).stem
     raw = re.sub(r"[^A-Za-z0-9_]", "_", raw.strip().lower())
@@ -106,7 +117,7 @@ def get_active_scope_name() -> str:
 def get_storage_key() -> str:
     if using_postgres():
         return f"postgres:{get_active_scope_name()}"
-    return str(Path(DB_FILE).resolve())
+    return str(Path(get_user_db()).resolve())
 
 
 def _require_psycopg():
@@ -199,7 +210,7 @@ class ConnectionWrapper:
 
 
 def _sqlite_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(get_user_db())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -377,6 +388,7 @@ def init_db() -> None:
         )
         conn.commit()
         conn.close()
+        init_rag_tables()
         return
 
     conn = _connect()
@@ -485,3 +497,4 @@ def init_db() -> None:
         )
     conn.commit()
     conn.close()
+    init_rag_tables()

@@ -8,6 +8,8 @@ import json
 import threading
 from datetime import date, timedelta
 from io import BytesIO
+from pathlib import Path
+from time import monotonic
 
 import flet as ft
 import matplotlib
@@ -16,10 +18,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-_bg_results: dict[int, list[str]] = {}
+_bg_results: dict[tuple[str, int], list[str]] = {}
 _bg_lock = threading.Lock()
-_pending_sessions: set[int] = set()
-_active_callbacks: dict[int, list[callable]] = {}
+_pending_sessions: set[tuple[str, int]] = set()
+_active_callbacks: dict[tuple[str, int], list[callable]] = {}
 _sessions_meta_lock = threading.Lock()
 
 import pandas as pd
@@ -353,6 +355,52 @@ def _typing_bubble() -> ft.Control:
     )
 
 
+def _ai_bubble(text: str, bubble_w: int = 0) -> ft.Control:
+    return ft.Row(
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.START,
+        controls=[
+            ft.Container(
+                expand=True,
+                content=ft.Text(text, selectable=True, size=13, color=ft.Colors.WHITE),
+                padding=ft.Padding(left=14, right=14, top=10, bottom=10),
+                bgcolor="#1e293b",
+                border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
+                margin=ft.Margin(bottom=10, top=0, left=0, right=0),
+            ),
+        ],
+    )
+
+
+def _typing_bubble() -> ft.Control:
+    return ft.Row(
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        controls=[
+            ft.Container(
+                expand=True,
+                margin=ft.Margin(left=0, bottom=10, top=0, right=0),
+                content=ft.Row(
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.ProgressRing(width=12, height=12, stroke_width=2, color="#38bdf8"),
+                        ft.Text(
+                            "AI is thinking...",
+                            size=12,
+                            italic=True,
+                            color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE),
+                        ),
+                    ],
+                ),
+                padding=ft.Padding(left=14, right=14, top=10, bottom=10),
+                bgcolor="#1e293b",
+                border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
+            ),
+        ],
+    )
+
+
 def _generate_session_title(user_message: str, ai_reply: str) -> str:
     user_lower = user_message.lower()
     topics = {
@@ -398,7 +446,57 @@ def _dialog_size(
     return dialog_width, dialog_height
 
 
-def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) -> None:
+def _storage_key_for_scope(db_scope: str) -> str:
+    if db.using_postgres():
+        return f"postgres:{db_scope}"
+    return str(Path(db_scope).resolve())
+
+
+def _run_scoped_db_call(db_scope: str, fn, *args):
+    db.set_user_db(db_scope)
+    return fn(*args)
+
+
+def _bind_page_scope(page: ft.Page) -> None:
+    db_scope = getattr(page, "_user_db_scope", None)
+    if db_scope:
+        db.set_user_db(db_scope)
+
+
+def _allow_page_action(page: ft.Page, key: str, cooldown: float = 0.45) -> bool:
+    gates = getattr(page, "_click_gate_until", None)
+    if gates is None:
+        gates = {}
+        setattr(page, "_click_gate_until", gates)
+    now = monotonic()
+    allowed_at = float(gates.get(key, 0.0))
+    if now < allowed_at:
+        return False
+    gates[key] = now + cooldown
+    return True
+
+
+def _begin_modal(page: ft.Page, key: str, cooldown: float = 0.45) -> bool:
+    if not _allow_page_action(page, key, cooldown):
+        return False
+    open_modals = getattr(page, "_open_modal_keys", None)
+    if open_modals is None:
+        open_modals = set()
+        setattr(page, "_open_modal_keys", open_modals)
+    if key in open_modals:
+        return False
+    open_modals.add(key)
+    return True
+
+
+def _end_modal(page: ft.Page, key: str) -> None:
+    open_modals = getattr(page, "_open_modal_keys", None)
+    if open_modals is not None:
+        open_modals.discard(key)
+
+
+def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str, db_scope: str) -> None:
+    db.set_user_db(db_scope)
     sessions_col = ft.Column(scroll=ft.ScrollMode.AUTO, expand=True, spacing=6)
     storage_text = ft.Text("", size=11, color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE))
     selected_ids: list[int] = []
@@ -491,18 +589,33 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 
     def _close():
         dlg.open = False
+        _end_modal(page, "chat_history")
         page.update()
 
     def _new_chat():
         _close()
-        _open_ai_chat(page, financial_context, api_key, None, [])
+        if not _begin_modal(page, "ai_chat"):
+            return
+        try:
+            _open_ai_chat(page, financial_context, api_key, None, [], db_scope)
+        except Exception:
+            _end_modal(page, "ai_chat")
+            raise
 
     def _resume(session_id: int):
+        db.set_user_db(db_scope)
         history = db.get_chat_messages(session_id)
         _close()
-        _open_ai_chat(page, financial_context, api_key, session_id, history)
+        if not _begin_modal(page, "ai_chat"):
+            return
+        try:
+            _open_ai_chat(page, financial_context, api_key, session_id, history, db_scope)
+        except Exception:
+            _end_modal(page, "ai_chat")
+            raise
 
     def _refresh():
+        db.set_user_db(db_scope)
         sessions = db.get_chat_sessions()
         kb = db.get_chat_storage_kb()
         storage_text.value = f"💾 Storage used: {kb} KB"
@@ -591,6 +704,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
                 ft.TextButton("Cancel", on_click=lambda _: (setattr(confirm, "open", False), page.update())),
                 ft.TextButton("Delete", style=ft.ButtonStyle(color=ft.Colors.RED_400),
                               on_click=lambda _: (setattr(confirm, "open", False), page.update(),
+                                                  db.set_user_db(db_scope),
                                                   db.delete_chat_session(sid), _refresh())),
             ],
         )
@@ -617,6 +731,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
         page.update()
 
     def _do_bulk_delete():
+        db.set_user_db(db_scope)
         for sid in list(selected_ids):
             db.delete_chat_session(sid)
         selected_ids.clear()
@@ -631,6 +746,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
                 ft.TextButton("Yes, Clear Everything",
                               style=ft.ButtonStyle(bgcolor=ft.Colors.RED_400, color=ft.Colors.WHITE),
                               on_click=lambda _: (setattr(confirm, "open", False), page.update(),
+                                                  db.set_user_db(db_scope),
                                                   db.delete_all_chat_sessions(), _refresh())),
             ],
         )
@@ -646,6 +762,7 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
             new_title = title_field.value.strip()
             if not new_title:
                 return
+            db.set_user_db(db_scope)
             db.update_chat_session_title(session_id, new_title)
             edit_dlg.open = False
             page.update()
@@ -678,13 +795,24 @@ def _open_history_dialog(page: ft.Page, financial_context: str, api_key: str) ->
 # Main chat dialog
 # ---------------------------------------------------------------------------
 
-def _open_ai_chat(page, financial_context, api_key, session_id, history):
+def _open_ai_chat(page, financial_context, api_key, session_id, history, db_scope: str):
+    db.set_user_db(db_scope)
     win_w = getattr(page, "window_width", None) or getattr(page, "width", None) or 900
     win_h = getattr(page, "window_height", None) or getattr(page, "height", None) or 700
     dlg_w = max(320, min(720, int(win_w * 0.92)))
     dlg_h = max(440, min(700, int(win_h * 0.88)))
+    light_mode = page.theme_mode == ft.ThemeMode.LIGHT
+    ai_bubble_bg = "#e2e8f0" if light_mode else "#1e293b"
+    ai_bubble_fg = "#0f172a" if light_mode else ft.Colors.WHITE
+    ai_thinking_fg = ft.Colors.with_opacity(0.72, "#0f172a") if light_mode else ft.Colors.with_opacity(0.6, ft.Colors.WHITE)
+    user_bubble_bg = "#0ea5e9" if light_mode else "#0369a1"
+    user_bubble_fg = ft.Colors.WHITE
+    edit_panel_bg = "#f8fafc" if light_mode else "#0f172a"
+    edit_panel_border = "#cbd5e1" if light_mode else "#334155"
+    action_text_color = ft.Colors.with_opacity(0.70, "#0f172a") if light_mode else ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
 
     current_session = [session_id]
+    storage_key = _storage_key_for_scope(db_scope)
     conv_history = list(history)
     is_typing = [False]
     _has_welcome = [not bool(history)]
@@ -694,6 +822,48 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     registered_callback: list[callable | None] = [None]
 
     messages_col = ft.Column(spacing=0, scroll=ft.ScrollMode.AUTO, expand=True, auto_scroll=True)
+
+    def _dialog_ai_bubble(text: str) -> ft.Control:
+        return ft.Row(
+            alignment=ft.MainAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            controls=[
+                ft.Container(
+                    expand=True,
+                    content=ft.Text(text, selectable=True, size=13, color=ai_bubble_fg),
+                    padding=ft.Padding(left=14, right=14, top=10, bottom=10),
+                    bgcolor=ai_bubble_bg,
+                    border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
+                    margin=ft.Margin(bottom=10, top=0, left=0, right=0),
+                ),
+            ],
+        )
+
+    def _dialog_typing_bubble() -> ft.Control:
+        return ft.Row(
+            alignment=ft.MainAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Container(
+                    expand=True,
+                    margin=ft.Margin(left=0, bottom=10, top=0, right=0),
+                    content=ft.Row(
+                        spacing=6,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            ft.ProgressRing(width=12, height=12, stroke_width=2, color="#38bdf8"),
+                            ft.Text("AI is thinking...", size=12, italic=True, color=ai_thinking_fg),
+                        ],
+                    ),
+                    padding=ft.Padding(left=14, right=14, top=10, bottom=10),
+                    bgcolor=ai_bubble_bg,
+                    border_radius=ft.BorderRadius(top_left=4, top_right=16, bottom_left=16, bottom_right=16),
+                ),
+            ],
+        )
+
+    def _session_key(sid: int) -> tuple[str, int]:
+        return (storage_key, sid)
 
     def _edit_and_resend(hist_idx, bubble_row, new_text):
         if is_typing[0]:
@@ -707,6 +877,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         bubble_map[:] = [(i, c) for (i, c) in bubble_map if i < hist_idx]
         if current_session[0] is not None:
             db_keep = hist_idx - (1 if _has_welcome[0] else 0)
+            db.set_user_db(db_scope)
             db.truncate_chat_messages_after_index(current_session[0], db_keep)
         page.update()
         _send(new_text)
@@ -719,16 +890,16 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             vertical_alignment=ft.CrossAxisAlignment.END,
             controls=[ft.Container(width=48), msg_col],
         )
-        btn_color = ft.Colors.with_opacity(0.45, ft.Colors.WHITE)
+        btn_color = action_text_color
         btn_style = ft.ButtonStyle(padding=ft.padding.only(left=0, right=2, top=0, bottom=0))
 
         def _render_view():
             msg_col.controls = [
                 ft.Container(
                     expand=True,
-                    content=ft.Text(current_text[0], selectable=True, size=13, color=ft.Colors.WHITE),
+                    content=ft.Text(current_text[0], selectable=True, size=13, color=user_bubble_fg),
                     padding=ft.Padding(left=14, right=14, top=10, bottom=10),
-                    bgcolor="#0369a1",
+                    bgcolor=user_bubble_bg,
                     border_radius=ft.BorderRadius(top_left=16, top_right=4, bottom_left=16, bottom_right=16),
                     margin=ft.Margin(bottom=2, top=0, left=0, right=0),
                 ),
@@ -750,7 +921,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             ef = ft.TextField(
                 value=current_text[0], multiline=True, min_lines=1, max_lines=6,
                 text_size=13, autofocus=True, border_radius=12,
-                border_color="#334155", focused_border_color="#0ea5e9", expand=True,
+                border_color=edit_panel_border, focused_border_color="#0ea5e9", expand=True,
             )
 
             def _confirm(_=None):
@@ -764,15 +935,15 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             ef.on_submit = lambda e: _confirm()
             msg_col.controls = [
                 ft.Container(
-                    expand=True, bgcolor="#0f172a", border_radius=12,
-                    padding=ft.padding.all(8), border=ft.border.all(1, "#334155"),
+                    expand=True, bgcolor=edit_panel_bg, border_radius=12,
+                    padding=ft.padding.all(8), border=ft.border.all(1, edit_panel_border),
                     content=ft.Column(spacing=6, controls=[
                         ef,
-                        ft.Row(alignment=ft.MainAxisAlignment.END, spacing=6, controls=[
+                        ft.Row(alignment=ft.MainAxisAlignment.END, spacing=6, tight=True, controls=[
                             ft.TextButton("Cancel", on_click=lambda _: _render_view(),
-                                          style=ft.ButtonStyle(color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE))),
+                                          style=ft.ButtonStyle(color=action_text_color)),
                             ft.FilledButton("Send edit", icon=ft.Icons.SEND_ROUNDED, on_click=_confirm,
-                                            style=ft.ButtonStyle(bgcolor="#0369a1", color=ft.Colors.WHITE,
+                                            style=ft.ButtonStyle(bgcolor=user_bubble_bg, color=ft.Colors.WHITE,
                                                                  shape=ft.RoundedRectangleBorder(radius=10))),
                         ]),
                     ]),
@@ -786,7 +957,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         messages_col.controls.append(outer_row)
 
     def _add_ai_bubble(text):
-        messages_col.controls.append(_ai_bubble(text))
+        messages_col.controls.append(_dialog_ai_bubble(text))
 
     def _persisted_history() -> list[dict]:
         if _has_welcome[0] and conv_history and conv_history[0].get("role") == "assistant":
@@ -840,7 +1011,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
     stop_btn = ft.IconButton(icon=ft.Icons.STOP_CIRCLE_OUTLINED, icon_color="#f87171",
                              icon_size=22, tooltip="Stop", visible=False,
                              on_click=lambda _: _stop_thinking())
-    typing_ind = _typing_bubble()
+    typing_ind = _dialog_typing_bubble()
 
     def _update_stop_btn():
         stop_btn.visible = is_typing[0]
@@ -861,6 +1032,8 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         page.update()
 
     def _register_callback(sid):
+        session_key = _session_key(sid)
+
         def _deliver(reply):
             if (conv_history and conv_history[-1].get("role") == "assistant"
                     and conv_history[-1].get("content") == reply):
@@ -876,29 +1049,31 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                     page.update()
                 else:
                     with _bg_lock:
-                        _bg_results.setdefault(sid, []).append(reply)
+                        _bg_results.setdefault(session_key, []).append(reply)
             except Exception:
                 with _bg_lock:
-                    _bg_results.setdefault(sid, []).append(reply)
+                    _bg_results.setdefault(session_key, []).append(reply)
         registered_callback[0] = _deliver
         with _sessions_meta_lock:
-            callbacks = _active_callbacks.setdefault(sid, [])
+            callbacks = _active_callbacks.setdefault(session_key, [])
             if _deliver not in callbacks:
                 callbacks.append(_deliver)
 
     def _unregister_callback(sid):
+        session_key = _session_key(sid)
         with _sessions_meta_lock:
-            callbacks = _active_callbacks.get(sid, [])
+            callbacks = _active_callbacks.get(session_key, [])
             current = registered_callback[0]
             callbacks = [cb for cb in callbacks if cb is not current]
             if callbacks:
-                _active_callbacks[sid] = callbacks
+                _active_callbacks[session_key] = callbacks
             else:
-                _active_callbacks.pop(sid, None)
+                _active_callbacks.pop(session_key, None)
         registered_callback[0] = None
 
     def _ensure_session():
         if current_session[0] is None:
+            db.set_user_db(db_scope)
             current_session[0] = db.create_chat_session("New Chat")
             _register_callback(current_session[0])
         return current_session[0]
@@ -914,12 +1089,14 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         conv_history.append({"role": "user", "content": text})
         _add_user_bubble(text, hist_idx)
         sid = _ensure_session()
+        session_key = _session_key(sid)
+        db.set_user_db(db_scope)
         db.save_chat_message(sid, "user", text)
         is_typing[0] = True
         _stop_requested[0] = False
         _set_input_enabled(False)
         with _sessions_meta_lock:
-            _pending_sessions.add(sid)
+            _pending_sessions.add(session_key)
         if typing_ind not in messages_col.controls:
             messages_col.controls.append(typing_ind)
         page.update()
@@ -933,6 +1110,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             )
             # Strip any [NOTIFY: title | message] tag before saving/displaying
             reply, notif_title, notif_msg = _parse_notify_tag(raw_reply)
+            db.set_user_db(db_scope)
             if notif_title and notif_msg:
                 # AI explicitly flagged something — add it directly
                 notif.add_ai_insight(notif_title, notif_msg)
@@ -940,16 +1118,16 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                 # Fallback: keyword-scan the reply for financial alerts
                 notif.scan_ai_reply(reply)
             with _sessions_meta_lock:
-                _pending_sessions.discard(sid)
-                callbacks = list(_active_callbacks.get(sid, []))
+                _pending_sessions.discard(session_key)
+                callbacks = list(_active_callbacks.get(session_key, []))
             if _stop_requested[0]:
                 _stop_requested[0] = False
                 return
-            await asyncio.to_thread(db.save_chat_message, sid, "assistant", reply)
+            await asyncio.to_thread(_run_scoped_db_call, db_scope, db.save_chat_message, sid, "assistant", reply)
             user_msgs = [m for m in conv_history if m["role"] == "user"]
             if len(user_msgs) == 1:
                 title = _generate_session_title(user_msgs[0]["content"], reply)
-                await asyncio.to_thread(db.update_chat_session_title, sid, title)
+                await asyncio.to_thread(_run_scoped_db_call, db_scope, db.update_chat_session_title, sid, title)
             delivered = False
             for callback in callbacks:
                 try:
@@ -959,13 +1137,19 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                     continue
             if not delivered:
                 with _bg_lock:
-                    _bg_results.setdefault(sid, []).append(reply)
+                    _bg_results.setdefault(session_key, []).append(reply)
 
         page.run_task(_worker)
 
     def _open_history(_):
+        if not _begin_modal(page, "chat_history"):
+            return
         _close()
-        _open_history_dialog(page, financial_context, api_key)
+        try:
+            _open_history_dialog(page, financial_context, api_key, db_scope)
+        except Exception:
+            _end_modal(page, "chat_history")
+            raise
 
     dlg = ft.AlertDialog(
         modal=True,
@@ -973,9 +1157,19 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             controls=[
                 ft.Row(spacing=8, expand=True, controls=[
-                    ft.Container(width=28, height=28, border_radius=14,
-                                 bgcolor="#1e3a5f", alignment=ft.Alignment(0, 0),
-                                 content=ft.Text("🤖", size=14)),
+                    ft.Container(
+                        width=28,
+                        height=28,
+                        border_radius=14,
+                        bgcolor="#1e3a5f",
+                        padding=2,
+                        alignment=ft.Alignment(0, 0),
+                            content=ft.Container(
+                                border_radius=12,
+                                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                                content=ft.Image(src="app_icon.png", fit=ft.BoxFit.COVER),
+                            ),
+                    ),
                     ft.Text("AI Finance Advisor", weight=ft.FontWeight.BOLD, size=15, expand=True),
                 ]),
                 ft.Row(spacing=0, controls=[
@@ -1008,12 +1202,14 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
         poller_state["active"] = False
         if current_session[0] is not None:
             _unregister_callback(current_session[0])
+        _end_modal(page, "ai_chat")
         page.update()
 
     if session_id is not None:
+        session_key = _session_key(session_id)
         _register_callback(session_id)
         with _bg_lock:
-            pending_replies = _bg_results.pop(session_id, [])
+            pending_replies = _bg_results.pop(session_key, [])
         if pending_replies:
             for pending_reply in pending_replies:
                 already_there = (conv_history and conv_history[-1].get("role") == "assistant"
@@ -1023,7 +1219,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
                     _add_ai_bubble(pending_reply)
         else:
             with _sessions_meta_lock:
-                worker_running = session_id in _pending_sessions
+                worker_running = session_key in _pending_sessions
             if worker_running:
                 is_typing[0] = True
                 _set_input_enabled(False)
@@ -1037,7 +1233,7 @@ def _open_ai_chat(page, financial_context, api_key, session_id, history):
             if sid is None:
                 continue
             try:
-                rows = await asyncio.to_thread(db.get_chat_messages, sid)
+                rows = await asyncio.to_thread(_run_scoped_db_call, db_scope, db.get_chat_messages, sid)
             except Exception:
                 continue
             if not poller_state["active"]:
@@ -1560,6 +1756,7 @@ def _cashflow_table_card(
 
 
 def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
+    _bind_page_scope(page)
     global _CARD_CONTENT_HEIGHT
     _CARD_CONTENT_HEIGHT = _dashboard_content_height(page.width)
 
@@ -1693,11 +1890,115 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         f"\n=== RECURRING ===\n{chr(10).join(rec_lines) or '  (none)'}"
     )
 
+    summary_lines = [
+        f"Today: {today_str} | Currency: {currency_code}",
+        f"Current balance: {peso(balance)} | Starting balance: {peso(starting_balance)}",
+        f"Income this month: {peso(month_income)} | Spent this month: {peso(month_total)} | Net cashflow: {peso(net_cashflow)}",
+        f"Top spending category this month: {biggest_category} ({peso(biggest_value)})",
+        f"Savings rate this month: {savings_rate:.1f}%",
+        "",
+        "Spending by category:",
+        *([f"- {cat}: {peso(amt)}" for cat, amt in expense_map.items()] or ["- No category spending yet"]),
+        "",
+        "Budget status:",
+        *(budget_lines or ["  â€¢ No budget limits set"]),
+    ]
+    rag_seed_documents: list[dict[str, object]] = []
+    all_transactions = db.get_transactions()
+    for txn in all_transactions:
+        rag_seed_documents.append(
+            {
+                "source_type": "transaction",
+                "source_id": str(txn.id),
+                "title": f"{txn.txn_type.title()} - {txn.category} - {txn.txn_date}",
+                "content": (
+                    f"Transaction on {txn.txn_date}. "
+                    f"Type: {txn.txn_type}. "
+                    f"Amount: {peso(txn.amount)}. "
+                    f"Category: {txn.category}. "
+                    f"Description: {txn.description or 'No description provided'}."
+                ),
+                "metadata": {
+                    "txn_type": txn.txn_type,
+                    "category": txn.category,
+                    "txn_date": txn.txn_date,
+                },
+            }
+        )
+    for budget in budget_limits:
+        spent = expense_map.get(budget.category, 0.0)
+        pct = (spent / budget.monthly_limit * 100) if budget.monthly_limit > 0 else 0
+        status = ("Exceeded" if pct >= 100 else "Warning" if pct >= 80
+                  else "On Track" if pct >= 50 else "Good")
+        rag_seed_documents.append(
+            {
+                "source_type": "budget",
+                "source_id": str(budget.id),
+                "title": f"Budget - {budget.category}",
+                "content": (
+                    f"Budget for {budget.category}. "
+                    f"Monthly limit: {peso(budget.monthly_limit)}. "
+                    f"Spent this month: {peso(spent)}. "
+                    f"Usage: {pct:.0f} percent. "
+                    f"Status: {status}. "
+                    f"Duration type: {budget.duration_type}."
+                ),
+                "metadata": {
+                    "category": budget.category,
+                    "status": status,
+                    "duration_type": budget.duration_type,
+                },
+            }
+        )
+    for rec in recurring:
+        rag_seed_documents.append(
+            {
+                "source_type": "recurring",
+                "source_id": str(rec.id),
+                "title": f"Recurring - {rec.category}",
+                "content": (
+                    f"Recurring {rec.txn_type} for {rec.category}. "
+                    f"Amount: {peso(rec.amount)}. "
+                    f"Frequency: {rec.frequency}. "
+                    f"Next date: {rec.next_date}. "
+                    f"Active: {'yes' if rec.active else 'no'}. "
+                    f"Description: {rec.description or 'No description provided'}."
+                ),
+                "metadata": {
+                    "txn_type": rec.txn_type,
+                    "category": rec.category,
+                    "next_date": rec.next_date,
+                    "active": bool(rec.active),
+                },
+            }
+        )
+    try:
+        db.sync_rag_documents("finance_records", rag_seed_documents)
+    except Exception:
+        pass
+    financial_context = {
+        "summary": "\n".join(summary_lines),
+        "rag_source_group": "finance_records",
+    }
+    chat_db_scope = db.get_user_db()
+
     def open_ai_chat(_):
-        _open_ai_chat(page, financial_context, api_key, None, [])
+        if not _begin_modal(page, "ai_chat"):
+            return
+        try:
+            _open_ai_chat(page, financial_context, api_key, None, [], chat_db_scope)
+        except Exception:
+            _end_modal(page, "ai_chat")
+            raise
 
     def open_history(_):
-        _open_history_dialog(page, financial_context, api_key)
+        if not _begin_modal(page, "chat_history"):
+            return
+        try:
+            _open_history_dialog(page, financial_context, api_key, chat_db_scope)
+        except Exception:
+            _end_modal(page, "chat_history")
+            raise
 
     def open_add_income(_):
         from ui.transactions_screen import _income_dialog
@@ -1828,8 +2129,14 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                                 begin=ft.Alignment(-1, -1), end=ft.Alignment(1, 1),
                                 colors=["#0ea5e9", "#14b8a6"],
                             ),
+                            padding=2,
                             alignment=ft.Alignment(0, 0),
-                            content=ft.Text("AI", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                                content=ft.Container(
+                                    border_radius=19,
+                                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                                    bgcolor="#082f49",
+                                    content=ft.Image(src="app_icon.png", fit=ft.BoxFit.COVER),
+                                ),
                         ),
                         ft.Column(spacing=2, expand=True, controls=[
                             ft.Text("AI Finance Advisor", weight=ft.FontWeight.BOLD, size=14),
@@ -2119,9 +2426,18 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
     dashboard_module_specs: dict[str, tuple[dict[str, int], callable]] = {}
 
     def _persist_dashboard_order() -> None:
+        _bind_page_scope(page)
         db.set_app_meta(_DASHBOARD_ORDER_KEY, json.dumps(module_order))
 
+    def _sync_dashboard_grid_order() -> None:
+        module_grid.controls = [
+            dashboard_modules[module_id]
+            for module_id in module_order
+            if module_id in dashboard_modules
+        ]
+
     def _rebuild_dashboard_grid() -> None:
+        _bind_page_scope(page)
         dashboard_modules.clear()
         module_shell_refs.clear()
         module_surface_refs.clear()
@@ -2131,13 +2447,10 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 col_spec,
                 builder,
             )
-        module_grid.controls = [
-            dashboard_modules[module_id]
-            for module_id in module_order
-            if module_id in dashboard_modules
-        ]
+        _sync_dashboard_grid_order()
 
     def _set_reorder_armed(module_id: str | None) -> None:
+        _bind_page_scope(page)
         reorder_state["armed_id"] = module_id
         if module_id is None:
             reorder_state["pending_id"] = None
@@ -2263,12 +2576,20 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         return dialog_width, dialog_height, content_height
 
     def _open_expanded_module(module_id: str) -> None:
+        if not _begin_modal(page, "dashboard_expand"):
+            return
+        _bind_page_scope(page)
         builder = expanded_dashboard_modules.get(module_id)
         if builder is None:
+            _end_modal(page, "dashboard_expand")
             return
 
         dialog_width, dialog_height, _ = _expanded_dialog_size()
-        built_content = builder()
+        try:
+            built_content = builder()
+        except Exception:
+            _end_modal(page, "dashboard_expand")
+            raise
         expanded_body = built_content.content if isinstance(built_content, ft.Card) else built_content
 
         dlg = ft.AlertDialog(
@@ -2278,6 +2599,15 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 width=dialog_width,
                 height=dialog_height,
                 padding=ft.Padding(left=0, right=0, top=0, bottom=0),
+                border_radius=24,
+                clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                bgcolor=ft.Colors.SURFACE,
+                shadow=ft.BoxShadow(
+                    blur_radius=28,
+                    spread_radius=1,
+                    color=ft.Colors.with_opacity(0.20, ft.Colors.BLACK),
+                    offset=ft.Offset(0, 14),
+                ),
                 content=expanded_body,
             ),
             actions=[],
@@ -2303,9 +2633,11 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
 
     def _close_expanded_module(dlg: ft.AlertDialog) -> None:
         dlg.open = False
+        _end_modal(page, "dashboard_expand")
         page.update()
 
     def _on_module_drop(e, target_id: str) -> None:
+        _bind_page_scope(page)
         source_control = getattr(e, "src", None)
         if source_control is None and getattr(e, "src_id", None):
             source_control = page.get_control(e.src_id)
@@ -2325,15 +2657,17 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         drag_state["active_id"] = None
         reorder_state["armed_id"] = None
         reorder_state["pending_id"] = None
-        _rebuild_dashboard_grid()
+        _sync_dashboard_grid_order()
         page.update()
 
     def _on_drag_start(module_id: str) -> None:
+        _bind_page_scope(page)
         drag_state["active_id"] = module_id
         reorder_state["armed_id"] = module_id
         _queue_surface_refresh(module_id)
 
     def _on_drag_complete(module_id: str) -> None:
+        _bind_page_scope(page)
         drag_state["active_id"] = None
         reorder_state["armed_id"] = None
         reorder_state["pending_id"] = None
@@ -2362,6 +2696,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
         if mobile_mode:
             if pending_id and pending_id != module_id:
                 def _swap_into_place(_):
+                    _bind_page_scope(page)
                     source_id = reorder_state.get("pending_id")
                     if not source_id or source_id not in module_order or module_id not in module_order:
                         _set_reorder_armed(None)
@@ -2394,6 +2729,7 @@ def dashboard_screen(page: ft.Page, on_data_changed) -> ft.Control:
                 )
 
             def _select_reorder_source(_):
+                _bind_page_scope(page)
                 reorder_state["pending_id"] = module_id
                 _set_reorder_armed(module_id)
                 page.snack_bar = ft.SnackBar(

@@ -5,7 +5,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 flet run main.py
 
 # for Web App hosting
-$env:DATABASE_URL="postgresql://postgres:Salipuran321%23@127.0.0.1:5432/ai_budget_tracker" # to point it to the DB
+$env:DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@127.0.0.1:5432/ai_budget_tracker"
 .\venv\Scripts\flet.exe run --web --host 0.0.0.0 --port 8550 main.py
 
 
@@ -16,6 +16,8 @@ http://127.0.0.1:8550
 # for mobile browser
 http://192.168.1.23:8550
 
+#for testing hosting online
+& "C:\Users\jinsa\Downloads\cloudflared-windows-amd64.exe" tunnel --url http://localhost:8550
 #------------------------------------------
 
 # edit Admin password on terminal
@@ -27,7 +29,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 INSERT INTO app_state(key, value)
 VALUES (
   'master_admin_password_hash',
-  encode(digest('Salipuran321#', 'sha256'), 'hex')
+  encode(digest('YOUR_NEW_ADMIN_PASSWORD', 'sha256'), 'hex')
 )
 ON CONFLICT (key)
 DO UPDATE SET value = EXCLUDED.value;

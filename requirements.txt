@@ -12,3 +12,4 @@ matplotlib>=3.9,<4.0
 scikit-learn>=1.5,<2.0
 joblib>=1.4,<2.0
 ollama>=0.4,<0.6
+pgvector>=0.3.1,<0.4
