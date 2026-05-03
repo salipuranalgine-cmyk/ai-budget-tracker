@@ -17,7 +17,7 @@ USER_DATA_DIR = Path("user_data")
 DEFAULT_EMOJI = "🙂"
 LAST_ACTIVE_USER_KEY = "last_active_user_id"
 MASTER_ADMIN_PASSWORD_KEY = "master_admin_password_hash"
-DEFAULT_MASTER_ADMIN_PASSWORD = "Salipuran321"
+DEFAULT_MASTER_ADMIN_PASSWORD = "0987654321"
 
 
 @dataclass
